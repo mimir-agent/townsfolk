@@ -1,10 +1,17 @@
 // Wire protocol v1 between the SMAPI bridge (mod/) and the brain.
+// protocol/*.schema.json is the source of truth; these types and parsers mirror it, and
+// test/protocol.test.ts checks every request and response the tests use against the schemas.
 // Every request body is parsed here and nowhere else; handlers only see typed values.
 
-export type GameDay = {
-  season: string;
-  day: number;
-  year: number;
+export const PROTOCOL_VERSION = 1;
+
+export const SEASONS = ["spring", "summer", "fall", "winter"] as const;
+export type Season = (typeof SEASONS)[number];
+
+// A calendar day, without time or place.
+export type DayRef = { season: Season; day: number; year: number };
+
+export type GameDay = DayRef & {
   time: number;
   weather: string;
   location: string;
@@ -13,6 +20,7 @@ export type GameDay = {
 export type TranscriptLine = { speaker: "npc" | "player"; text: string };
 
 export type TalkRequest = {
+  v: 1;
   saveId: string;
   npc: string;
   playerName: string;
@@ -25,23 +33,35 @@ export type TalkRequest = {
 export type Choice = { id: string; text: string };
 
 export type TalkResponse = {
+  v: 1;
   line: string;
   choices: Choice[];
   end: boolean;
   source: "model" | "fallback";
 };
 
-export type DayEvent =
-  | { type: "talk"; npc: string; location: string; time: number; npcLine: string; playerChoice?: string }
-  | { type: "gift"; npc: string; location: string; time: number; item: string; taste?: string };
+// npc took part; witnesses are the other NPCs in the same location at the time.
+type EventBase = { npc: string; location: string; time: number; witnesses: string[] };
 
-export type DayEndRequest = { saveId: string; playerName: string; day: GameDay; events: DayEvent[] };
+export type DayEvent =
+  | (EventBase & { type: "talk"; npcLine: string; playerChoice?: string })
+  | (EventBase & { type: "gift"; item: string; taste?: string });
+
+export type DayEndRequest = { v: 1; saveId: string; playerName: string; day: GameDay; events: DayEvent[] };
+export type DayEndResponse = { v: 1; ok: true; pending: string[] };
+
+export type SavedRequest = { v: 1; saveId: string; day: DayRef };
+export type SavedResponse = { v: 1; ok: true; outcome: "committed" | "nothing-pending" | "stale-discarded"; committed: string[] };
+
+export type HealthResponse = { v: 1; ok: true; model: string };
+export type ErrorResponse = { v: 1; error: string };
 
 export class BadRequest extends Error {}
 
 // Names become file names, so the allowed alphabet is closed: letters, digits, space, dot,
 // apostrophe, underscore, hyphen. A leading dot is refused so "." and ".." cannot appear.
 const NAME = /^[\p{L}\p{N}][\p{L}\p{N} ._'-]{0,59}$/u;
+const MAX_WITNESSES = 40;
 
 function obj(v: unknown, where: string): Record<string, unknown> {
   if (typeof v !== "object" || v === null || Array.isArray(v)) throw new BadRequest(`${where} must be an object`);
@@ -58,26 +78,46 @@ function num(v: unknown, where: string): number {
   return v;
 }
 
+function int(v: unknown, where: string, min: number, max: number): number {
+  if (typeof v !== "number" || !Number.isInteger(v) || v < min || v > max) throw new BadRequest(`${where} must be an integer in ${min}..${max}`);
+  return v;
+}
+
 function name(v: unknown, where: string): string {
   const s = str(v, where, 60);
   if (!NAME.test(s)) throw new BadRequest(`${where} has characters outside the allowed set`);
   return s;
 }
 
+function optStr(v: unknown, where: string, max: number): string | undefined {
+  return v === undefined || v === null ? undefined : str(v, where, max);
+}
+
+// Body plus version check. Any v other than 1 (or none) is a 400, which the bridge treats as brain down.
+function body(v: unknown): Record<string, unknown> {
+  const b = obj(v, "body");
+  if (b.v !== PROTOCOL_VERSION) throw new BadRequest(`unsupported protocol version ${JSON.stringify(b.v ?? null)}; this brain speaks v${PROTOCOL_VERSION}`);
+  return b;
+}
+
+export function parseDayRef(v: unknown, where: string): DayRef {
+  const d = obj(v, where);
+  if (!SEASONS.includes(d.season as Season)) throw new BadRequest(`${where}.season must be one of ${SEASONS.join(", ")}`);
+  return { season: d.season as Season, day: int(d.day, `${where}.day`, 1, 28), year: int(d.year, `${where}.year`, 1, Number.MAX_SAFE_INTEGER) };
+}
+
 export function parseDay(v: unknown): GameDay {
   const d = obj(v, "day");
   return {
-    season: str(d.season, "day.season", 20),
-    day: num(d.day, "day.day"),
-    year: num(d.year, "day.year"),
-    time: num(d.time, "day.time"),
+    ...parseDayRef(d, "day"),
+    time: int(d.time, "day.time", 600, 2600),
     weather: str(d.weather, "day.weather", 20),
     location: str(d.location, "day.location", 80),
   };
 }
 
 export function parseTalk(v: unknown): TalkRequest {
-  const b = obj(v, "body");
+  const b = body(v);
   const f = obj(b.friendship, "friendship");
   const transcriptRaw = b.transcript ?? [];
   if (!Array.isArray(transcriptRaw) || transcriptRaw.length > 12) throw new BadRequest("transcript must be an array of at most 12 lines");
@@ -92,6 +132,7 @@ export function parseTalk(v: unknown): TalkRequest {
     recentChoice = { id: str(c.id, "recentChoice.id", 20), text: str(c.text, "recentChoice.text", 200) };
   }
   return {
+    v: 1,
     saveId: name(b.saveId, "saveId"),
     npc: name(b.npc, "npc"),
     playerName: str(b.playerName, "playerName", 40),
@@ -102,33 +143,38 @@ export function parseTalk(v: unknown): TalkRequest {
   };
 }
 
+function parseWitnesses(v: unknown, where: string, npc: string): string[] {
+  if (!Array.isArray(v) || v.length > MAX_WITNESSES) throw new BadRequest(`${where} must be an array of at most ${MAX_WITNESSES} names`);
+  const names = v.map((w, i) => name(w, `${where}[${i}]`));
+  if (new Set(names).size !== names.length) throw new BadRequest(`${where} has duplicates`);
+  if (names.includes(npc)) throw new BadRequest(`${where} must not include the event's own npc`);
+  return names;
+}
+
 export function parseDayEnd(v: unknown): DayEndRequest {
-  const b = obj(v, "body");
+  const b = body(v);
   if (!Array.isArray(b.events) || b.events.length > 500) throw new BadRequest("events must be an array of at most 500");
   const events = b.events.map((e, i): DayEvent => {
     const o = obj(e, `events[${i}]`);
-    const base = {
-      npc: name(o.npc, `events[${i}].npc`),
+    const npc = name(o.npc, `events[${i}].npc`);
+    const base: EventBase = {
+      npc,
       location: str(o.location, `events[${i}].location`, 80),
-      time: num(o.time, `events[${i}].time`),
+      time: int(o.time, `events[${i}].time`, 600, 2600),
+      witnesses: parseWitnesses(o.witnesses, `events[${i}].witnesses`, npc),
     };
     if (o.type === "talk") {
-      return {
-        type: "talk",
-        ...base,
-        npcLine: str(o.npcLine, `events[${i}].npcLine`, 400),
-        playerChoice: o.playerChoice === undefined || o.playerChoice === null ? undefined : str(o.playerChoice, `events[${i}].playerChoice`, 200),
-      };
+      return { type: "talk", ...base, npcLine: str(o.npcLine, `events[${i}].npcLine`, 400), playerChoice: optStr(o.playerChoice, `events[${i}].playerChoice`, 200) };
     }
     if (o.type === "gift") {
-      return {
-        type: "gift",
-        ...base,
-        item: str(o.item, `events[${i}].item`, 80),
-        taste: o.taste === undefined || o.taste === null ? undefined : str(o.taste, `events[${i}].taste`, 20),
-      };
+      return { type: "gift", ...base, item: str(o.item, `events[${i}].item`, 80), taste: optStr(o.taste, `events[${i}].taste`, 20) };
     }
     throw new BadRequest(`events[${i}].type must be talk or gift`);
   });
-  return { saveId: name(b.saveId, "saveId"), playerName: str(b.playerName, "playerName", 40), day: parseDay(b.day), events };
+  return { v: 1, saveId: name(b.saveId, "saveId"), playerName: str(b.playerName, "playerName", 40), day: parseDay(b.day), events };
+}
+
+export function parseSaved(v: unknown): SavedRequest {
+  const b = body(v);
+  return { v: 1, saveId: name(b.saveId, "saveId"), day: parseDayRef(b.day, "day") };
 }
