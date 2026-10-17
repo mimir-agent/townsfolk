@@ -39,6 +39,7 @@ import {
   scheduleSignature,
   type World,
 } from "./validate.ts";
+import { planCard } from "./voices.ts";
 
 export const HISTORY_NIGHTS = 7;
 // A goal whose progress has not moved for a season is retired and replaced.
@@ -181,6 +182,8 @@ Rules:
 - "quests": up to ${MAX_QUEST_CANDIDATES} mailed item-delivery requests, best first; only the first valid one is sent. "item" is an item id from the list, "from" a cast member, "reward" whole gold 0 to ${MAX_REWARD}, "text" the letter in that villager's voice, at most 400 characters. [] for none.
 - "friendship": how villagers feel about the farmer after what happened, delta -${MAX_FRIENDSHIP} to ${MAX_FRIENDSHIP} points, only where something gives a reason.
 - "relationships": shifts between two cast members from what they did or heard, delta -${MAX_RELATIONSHIP} to ${MAX_RELATIONSHIP}, with the reason.
+- Each villager's block starts with who they are and how open they are with the farmer at their current hearts; quests, happenings and friendship shifts stay inside that tier (a guarded villager does not confide or ask big favors).
+- Keep heavy themes as they are in the character's past. Never plan scenes of self-harm or crisis for anyone.
 - A villager only acts on what their own block says they know. Never use one villager's memory for another. Something told in confidence is never passed on.
 - Goal text at most ${MAX_GOAL} characters, progress 0 to 100; 100 means finished. No "$", "#", "{", "}", "<", ">", "|" anywhere.`;
 
@@ -194,6 +197,7 @@ export function buildPlanPrompt(req: PlanRequest, ctx: PlanContext, cast: readon
     const others = CAST.filter((o) => o !== npc).map((o) => `${o} ${relationship(ctx.town, npc, o)}`).join(", ");
     return [
       `## ${npc}`,
+      planCard(npc, req.hearts[npc] ?? 0),
       goalLine(npc, goal, need, avoid, req.day),
       `Feelings toward the others (-100 to 100): ${others}.`,
       `Memory (only what ${npc} took part in or saw):\n${memoryLines(ctx.memories.get(npc) ?? emptyMemory(npc))}`,

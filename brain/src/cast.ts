@@ -19,10 +19,12 @@ const STARTING: [CastMember, CastMember, number][] = [
   ["Abigail", "Gus", 25],
   ["Abigail", "Haley", 5],
   ["Abigail", "Lewis", 10],
-  ["Abigail", "Pierre", 35],
+  // Father and daughter; canon states a strained relationship over her beliefs (wiki, Pierre).
+  ["Abigail", "Pierre", 20],
   ["Abigail", "Robin", 15],
   ["Abigail", "Shane", 0],
   ["Emily", "Gus", 45],
+  // Sisters and housemates; loving, with chore friction that softens (wiki, Emily and Haley).
   ["Emily", "Haley", 50],
   ["Emily", "Lewis", 20],
   ["Emily", "Pierre", 15],
@@ -36,12 +38,16 @@ const STARTING: [CastMember, CastMember, number][] = [
   ["Haley", "Lewis", 5],
   ["Haley", "Pierre", 10],
   ["Haley", "Robin", 10],
-  ["Haley", "Shane", -25],
-  ["Lewis", "Pierre", 30],
-  ["Lewis", "Robin", 35],
+  // No canon link on either page; mild distance only, from her habit of judging on looks.
+  ["Haley", "Shane", -5],
+  // Cordial; Pierre resents business tax and courts the governor behind Lewis (wiki, Pierre).
+  ["Lewis", "Pierre", 15],
+  // Friendly; they greet newcomers together, but Robin presses him on business tax (wiki, Robin).
+  ["Lewis", "Robin", 25],
   ["Lewis", "Shane", -5],
   ["Pierre", "Robin", 25],
-  ["Pierre", "Shane", -30],
+  // Shane works for Joja, Pierre's rival, yet shops at Pierre's; no personal feud in canon.
+  ["Pierre", "Shane", -10],
   ["Robin", "Shane", 5],
 ];
 

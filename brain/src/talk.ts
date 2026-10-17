@@ -7,7 +7,7 @@ import { dateLabel } from "./memory.ts";
 import type { Choice, GameStats, Happening, HappeningView, TalkFact, TalkRequest, TalkResponse } from "./protocol.ts";
 import { describeStats, statsFor } from "./stats.ts";
 import { knownFactLines, type TownState } from "./town.ts";
-import { voiceFor } from "./voices.ts";
+import { talkCard, tierFor } from "./voices.ts";
 
 export const MAX_TURNS = 3;
 export const LINE_MAX = 220;
@@ -87,10 +87,11 @@ export function buildPrompt(
   mustEnd: boolean,
   offer: HappeningView | null,
 ): { system: string; user: string } {
-  const card = voiceFor(req.npc);
   const memory =
     mem.entries.length === 0 && mem.seasons.length === 0 && mem.years === ""
-      ? `You have no memories of ${req.playerName} yet; treat them as someone you are just getting to know.`
+      ? tierFor(req.friendship.hearts) === "0-2"
+        ? `You have no memories of ${req.playerName} yet; treat them as someone you are just getting to know.`
+        : `You have no specific memories of ${req.playerName} to draw on; keep to how close you already are, as the heart tier above says.`
       : [
           mem.firstMet
             ? `First met ${req.playerName}: ${mem.firstMet}. Talks so far: ${mem.talks}. Gifts received: ${mem.gifts}.`
@@ -104,11 +105,11 @@ export function buildPrompt(
           .join("\n");
   const convo = req.transcript.map((t) => `${t.speaker === "npc" ? req.npc : req.playerName}: ${t.text}`).join("\n");
   const user = [
-    `Character: ${card.name}`,
-    `Voice: ${card.voice}`,
+    `Character: ${req.npc}`,
+    talkCard(req.npc, req.friendship.hearts),
     `Now: ${dateLabel(req.day)}, ${req.day.time} (24h clock), weather ${req.day.weather}, at ${req.day.location}.`,
     `Talking with: ${req.playerName}, friendship ${req.friendship.hearts} hearts.`,
-    `Memory (only what ${card.name} took part in or saw):\n${memory}`,
+    `Memory (only what ${req.npc} took part in or saw):\n${memory}`,
     knowledgeBlock(req.npc, req.stats, town),
     todayBlock(req, ctx, offer),
     convo ? `Conversation so far:\n${convo}` : `${req.playerName} just walked up to start a conversation.`,

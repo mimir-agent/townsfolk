@@ -185,11 +185,12 @@ export async function runSim(opts: SimOptions): Promise<SimResult> {
   const goalsFinished: string[] = [];
   const friendship = new Map<string, number>(CAST.map((n) => [n, 250]));
   const bump = (npc: string, delta: number) => friendship.set(npc, Math.max(0, Math.min(2500, (friendship.get(npc) ?? 0) + delta)));
+  const hearts = () => Object.fromEntries([...friendship].map(([npc, p]) => [npc, Math.floor(p / 250)]));
 
   try {
     await post("/v1/world", worldReq);
     let date = START;
-    let today: PlanResponse = await post("/v1/plan", { v: 1, saveId, playerName: PLAYER, day: date, stats: { farmName: "Sim", daysPlayed: 0 } });
+    let today: PlanResponse = await post("/v1/plan", { v: 1, saveId, playerName: PLAYER, day: date, stats: { farmName: "Sim", daysPlayed: 0 }, hearts: hearts() });
     out.push(`# Town diary: ${opts.days} days, seed ${opts.seed}, model ${inner.name}`, "");
 
     for (let n = 1; n <= opts.days; n++) {
@@ -327,7 +328,7 @@ export async function runSim(opts: SimOptions): Promise<SimResult> {
       await post("/v1/day-end", { v: 1, saveId, playerName: PLAYER, day: gameDay(2200, "Farm"), events, together: [...together.values()].slice(0, 200) });
       const tomorrow = nextDay(date);
       const logMark = brainLog.length;
-      const nextPlan: PlanResponse = await post("/v1/plan", { v: 1, saveId, playerName: PLAYER, day: tomorrow, stats: { farmName: "Sim", daysPlayed: n } });
+      const nextPlan: PlanResponse = await post("/v1/plan", { v: 1, saveId, playerName: PLAYER, day: tomorrow, stats: { farmName: "Sim", daysPlayed: n }, hearts: hearts() });
       await post("/v1/saved", { v: 1, saveId, day: date });
       const townAfter = await store.loadTown(saveId);
       out.push(...gossipLines(townBefore, townAfter), ...relationshipLines(townBefore, townAfter, today));

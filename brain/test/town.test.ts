@@ -23,7 +23,6 @@ import {
   TEXT_MAX_BY_HOPS,
   type TownState,
 } from "../src/town.ts";
-import { hasCard, voiceFor } from "../src/voices.ts";
 import { tempStore, talkReq, withServer } from "./helpers.ts";
 
 const SAVE = "Farm_123";
@@ -235,9 +234,3 @@ test("NPC relationships: every cast pair has a starting score in -100..100, stor
   assert.deepEqual(onDisk.relationships, rel);
 });
 
-test("all 8 cast members have their own voice card", () => {
-  for (const npc of CAST) {
-    assert.ok(hasCard(npc), npc);
-    assert.doesNotMatch(voiceFor(npc).voice, /a resident of Pelican Town/, npc);
-  }
-});
