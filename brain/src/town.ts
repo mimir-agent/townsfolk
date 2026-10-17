@@ -13,7 +13,7 @@
 
 import { isCast, pairKey, startingRelationships } from "./cast.ts";
 import { dateLabel, dayKey, type PendingDay } from "./memory.ts";
-import type { DayRef } from "./protocol.ts";
+import type { DayRef, RelationshipShift } from "./protocol.ts";
 import type { Rng } from "./rng.ts";
 
 export const MAX_HOPS = 2;
@@ -127,10 +127,17 @@ export function gossipNight(town: TownState, night: DayRef, pairs: [string, stri
 // the cap. Returns the town unchanged when this exact night was the last one applied: that is a
 // commit that wrote the town but crashed before clearing the pending day, then ran again. An
 // earlier date is applied normally (the player restored an older save backup).
-export function applyNight(town: TownState, day: PendingDay, rng: Rng): TownState {
+// shifts are the NPC relationship changes the planner set for this day; they land with the day,
+// so a day that is never saved never moves a relationship.
+export function applyNight(town: TownState, day: PendingDay, rng: Rng, shifts: readonly RelationshipShift[] = []): TownState {
   const key = dayKey(day.day);
   if (town.lastNight === key) return town;
-  const withNew: TownState = { ...town, facts: [...town.facts, ...factsFromDay(day)] };
+  const relationships = { ...town.relationships };
+  for (const s of shifts) {
+    const k = pairKey(s.a, s.b);
+    relationships[k] = Math.max(-100, Math.min(100, (relationships[k] ?? 0) + s.delta));
+  }
+  const withNew: TownState = { ...town, relationships, facts: [...town.facts, ...factsFromDay(day)] };
   const after = gossipNight(withNew, day.day, pairsTogether(day), rng);
   return { ...after, lastNight: key, facts: after.facts.slice(-MAX_FACTS) };
 }

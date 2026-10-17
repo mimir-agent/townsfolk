@@ -74,7 +74,7 @@ export type SavedResponse = { v: 1; ok: true; outcome: "committed" | "nothing-pe
 // against it; the bridge later re-checks only what needs the live game (is the tile passable).
 export type WorldLocation = { name: string; width: number; height: number };
 export type WorldItem = { id: string; name: string };
-export type CalendarDay = { season: Season; day: number };
+export type CalendarDay = { season: Season; day: number; name: string };
 export type WorldRequest = {
   v: 1;
   saveId: string;
@@ -303,7 +303,7 @@ export function parseWorld(v: unknown): WorldRequest {
   const festivals = list(b.festivals, "festivals", MAX_FESTIVALS).map((f, i): CalendarDay => {
     const o = obj(f, `festivals[${i}]`);
     if (!SEASONS.includes(o.season as Season)) throw new BadRequest(`festivals[${i}].season must be one of ${SEASONS.join(", ")}`);
-    return { season: o.season as Season, day: int(o.day, `festivals[${i}].day`, 1, 28) };
+    return { season: o.season as Season, day: int(o.day, `festivals[${i}].day`, 1, 28), name: str(o.name, `festivals[${i}].name`, 60) };
   });
   const married = list(b.married, "married", MAX_WITNESSES).map((n, i) => name(n, `married[${i}]`));
   return { v: 1, saveId: name(b.saveId, "saveId"), locations, items, festivals, married };

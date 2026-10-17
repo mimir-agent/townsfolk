@@ -13,6 +13,10 @@ Rules:
 | `POST /v1/talk` | `talk-request` | `talk-response` |
 | `POST /v1/day-end` | `day-end-request` | `day-end-response` |
 | `POST /v1/saved` | `saved-request` | `saved-response` |
+| `POST /v1/world` | `world-request` | `world-response` |
+| `POST /v1/plan` | `plan-request` | `plan-response` |
 | any error | | `error-response` |
+
+Planning: at save load the bridge posts world (locations with sizes, the items quests may use, festival days, married NPCs). After day-end it posts plan for the day about to start. The brain asks the model once, validates every part against the world snapshot, and drops failing parts one by one; each drop is in `dropped` with a reason and in the brain log. Without a world snapshot, plan answers 409. Festival days are never planned. NPC relationship shifts in a plan are applied by the brain itself when that day is saved.
 
 Day lifecycle: at DayEnding the bridge posts day-end (always, even with no events). The brain holds that day as pending. After the game's Saved event the bridge posts saved with the same date, and only then is the day written to each NPC's memory. If the player reloads without saving, the next day-end replaces the pending day, so an unsaved day is never remembered.

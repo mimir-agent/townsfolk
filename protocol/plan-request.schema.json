@@ -1,0 +1,15 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/mimir-agent/townsfolk/protocol/plan-request.schema.json",
+  "title": "POST /v1/plan request",
+  "description": "Sent after day-end. Asks for the town plan for `day`, the day about to start. The day that just ended may still be pending (not yet saved); the planner reads it so tomorrow can react to it, but nothing is committed by this call. Needs a world snapshot first (409 otherwise).",
+  "type": "object",
+  "required": ["v", "saveId", "playerName", "day"],
+  "properties": {
+    "v": { "$ref": "common.schema.json#/$defs/v" },
+    "saveId": { "$ref": "common.schema.json#/$defs/name" },
+    "playerName": { "type": "string", "minLength": 1, "maxLength": 40 },
+    "day": { "$ref": "common.schema.json#/$defs/dayRef" },
+    "stats": { "$ref": "talk-request.schema.json#/properties/stats" }
+  }
+}

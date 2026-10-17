@@ -56,9 +56,13 @@ test("every schema in protocol/ compiles and is used by an endpoint", () => {
     "day-end-response",
     "error-response",
     "health-response",
+    "plan-request",
+    "plan-response",
     "saved-request",
     "saved-response",
     "talk-request",
     "talk-response",
+    "world-request",
+    "world-response",
   ]);
 });

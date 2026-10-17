@@ -21,7 +21,9 @@ import { join } from "node:path";
 import type { DayEndRequest, DayEvent, DayRef, Season } from "./protocol.ts";
 import { SEASONS } from "./protocol.ts";
 import { seededRng, seedFrom } from "./rng.ts";
+import { emptyPlans, recordNight, type Night, type PlanState } from "./plan.ts";
 import { applyNight, emptyTown, type TownState } from "./town.ts";
+import type { World } from "./validate.ts";
 
 export const MAX_ENTRIES = 14;
 export const MAX_ENTRY_TEXT = 1200;
@@ -244,6 +246,34 @@ export class MemoryStore {
     await this.writeJson(saveId, this.townPath(saveId), town);
   }
 
+  // The world snapshot the bridge sent at save load. Null until it has sent one.
+  async loadWorld(saveId: string): Promise<World | null> {
+    return (await this.readJson(join(this.dir, saveId, "_world.json"))) as World | null;
+  }
+
+  saveWorld(saveId: string, world: World): Promise<void> {
+    return this.serial(saveId, () => this.writeJson(saveId, join(this.dir, saveId, "_world.json"), world));
+  }
+
+  async loadPlans(saveId: string): Promise<PlanState> {
+    const raw = (await this.readJson(this.plansPath(saveId))) as PlanState | null;
+    if (raw === null) return emptyPlans();
+    if (raw.version !== 1) throw new Error(`plans file for ${saveId} has unknown version ${String((raw as { version: unknown }).version)}`);
+    return raw;
+  }
+
+  // Read, record and write under the save's queue. The model call happens outside it, so a long
+  // plan never holds up a saved call; two plans for the same save at once: the later one wins.
+  recordPlan(saveId: string, night: Night): Promise<void> {
+    return this.serial(saveId, async () => {
+      await this.writeJson(saveId, this.plansPath(saveId), recordNight(await this.loadPlans(saveId), night));
+    });
+  }
+
+  private plansPath(saveId: string): string {
+    return join(this.dir, saveId, "_plans.json");
+  }
+
   private serial<T>(saveId: string, fn: () => Promise<T>): Promise<T> {
     const run = (this.queues.get(saveId) ?? Promise.resolve()).then(fn);
     this.queues.set(saveId, run.catch(() => {}));
@@ -309,7 +339,8 @@ export class MemoryStore {
       }
       // The night's dice are seeded by save and date, so replaying a save replays its gossip.
       const rng = seededRng(seedFrom(`${saveId}:${dayKey(p.day)}`));
-      await this.saveTown(saveId, applyNight(await this.loadTown(saveId), p, rng));
+      const planned = (await this.loadPlans(saveId)).nights.find((n) => dayKey(n.day) === dayKey(p.day));
+      await this.saveTown(saveId, applyNight(await this.loadTown(saveId), p, rng, planned?.relationships ?? []));
       await rm(this.pendingPath(saveId));
       return { outcome: "committed", committed: [...share.keys()] };
     });

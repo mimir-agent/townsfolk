@@ -11,7 +11,7 @@
 // after restoring an older save, never stacks.
 
 import { CAST, type CastMember } from "./cast.ts";
-import { applyDay, dateLabel, dayKey, shareByNpc, type NpcMemory, type PendingDay } from "./memory.ts";
+import { applyDay, dateLabel, dayKey, emptyMemory, shareByNpc, type NpcMemory, type PendingDay } from "./memory.ts";
 import type { ModelAdapter } from "./model.ts";
 import type { DayRef, DroppedPart, GoalView, PlannedSchedule, PlanRequest, PlanResponse, RelationshipShift, ScheduleStop } from "./protocol.ts";
 import { SEASONS } from "./protocol.ts";
@@ -172,12 +172,15 @@ export function buildPlanPrompt(req: PlanRequest, ctx: PlanContext, cast: readon
   const last = prior.at(-1);
   const blocks = cast.map((npc) => {
     const goal = last?.goals[npc];
+    const need = goalNeed(goal, req.day);
+    // A goal retired tonight is not in the record yet, but the new one must differ from it too.
+    const avoid = [...(last?.retired[npc] ?? []), ...(need !== "active" && goal !== undefined ? [goal.text] : [])].slice(-RETIRED_KEPT);
     const others = CAST.filter((o) => o !== npc).map((o) => `${o} ${relationship(ctx.town, npc, o)}`).join(", ");
     return [
       `## ${npc}`,
-      goalLine(npc, goal, goalNeed(goal, req.day), last?.retired[npc] ?? [], req.day),
+      goalLine(npc, goal, need, avoid, req.day),
       `Feelings toward the others (-100 to 100): ${others}.`,
-      `Memory (only what ${npc} took part in or saw):\n${memoryLines(ctx.memories.get(npc) ?? { entries: [], seasons: [], years: "" } as unknown as NpcMemory)}`,
+      `Memory (only what ${npc} took part in or saw):\n${memoryLines(ctx.memories.get(npc) ?? emptyMemory(npc))}`,
       knowledgeBlock(npc, req.stats, ctx.town),
     ]
       .filter(Boolean)

@@ -3,6 +3,7 @@
 //   TOWNSFOLK_PORT         default 7341 (always bound to 127.0.0.1)
 //   TOWNSFOLK_STATE_DIR    default ~/.local/state/townsfolk
 //   TOWNSFOLK_TALK_MS      per-turn deadline in ms, default 7000 (the mod gives up at 8s)
+//   TOWNSFOLK_PLAN_MS      deadline for one night's plan in ms (all attempts and the regen), default 120000
 //   TOWNSFOLK_CLAUDE_BIN   default "claude"
 //   TOWNSFOLK_CLAUDE_MODEL default "haiku" (fast enough to answer inside the deadline)
 //   ANTHROPIC_API_KEY      required only when TOWNSFOLK_MODEL=anthropic
@@ -33,9 +34,10 @@ function pickModel(): ModelAdapter {
 const port = Number(env.TOWNSFOLK_PORT ?? 7341);
 const stateDir = env.TOWNSFOLK_STATE_DIR ?? join(homedir(), ".local", "state", "townsfolk");
 const talkDeadlineMs = Number(env.TOWNSFOLK_TALK_MS ?? 7000);
+const planDeadlineMs = Number(env.TOWNSFOLK_PLAN_MS ?? 120000);
 const model = pickModel();
 const log = (msg: string) => console.log(`${new Date().toISOString()} ${msg}`);
 
-createBrain({ store: new MemoryStore(stateDir), model, talkDeadlineMs, log }).listen(port, "127.0.0.1", () => {
+createBrain({ store: new MemoryStore(stateDir), model, talkDeadlineMs, planDeadlineMs, log }).listen(port, "127.0.0.1", () => {
   log(`townsfolk brain on http://127.0.0.1:${port} model=${model.name} state=${stateDir}`);
 });

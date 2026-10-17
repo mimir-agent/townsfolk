@@ -1,0 +1,60 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/mimir-agent/townsfolk/protocol/world-request.schema.json",
+  "title": "POST /v1/world request",
+  "description": "Sent at save load. The world snapshot the brain's plan validator checks every plan against. Replaces any earlier snapshot for the save. /v1/plan answers 409 until one has been sent.",
+  "type": "object",
+  "required": ["v", "saveId", "locations", "items", "festivals", "married"],
+  "properties": {
+    "v": { "$ref": "common.schema.json#/$defs/v" },
+    "saveId": { "$ref": "common.schema.json#/$defs/name" },
+    "locations": {
+      "type": "array",
+      "maxItems": 200,
+      "description": "Locations a planned NPC may go to, with their size in tiles. Names go into game schedule strings, so they are limited to A-Z a-z 0-9 _ . -",
+      "items": {
+        "type": "object",
+        "required": ["name", "width", "height"],
+        "properties": {
+          "name": { "type": "string", "pattern": "^[A-Za-z0-9_.-]{1,80}$" },
+          "width": { "type": "integer", "minimum": 1, "maximum": 1000 },
+          "height": { "type": "integer", "minimum": 1, "maximum": 1000 }
+        }
+      }
+    },
+    "items": {
+      "type": "array",
+      "maxItems": 300,
+      "description": "Items the planner may ask for in a mailed quest: the game's qualified item id and a display name.",
+      "items": {
+        "type": "object",
+        "required": ["id", "name"],
+        "properties": {
+          "id": { "type": "string", "minLength": 1, "maxLength": 60 },
+          "name": { "type": "string", "minLength": 1, "maxLength": 80 }
+        }
+      }
+    },
+    "festivals": {
+      "type": "array",
+      "maxItems": 40,
+      "description": "Festival days. They are never planned.",
+      "items": {
+        "type": "object",
+        "required": ["season", "day", "name"],
+        "properties": {
+          "season": { "$ref": "common.schema.json#/$defs/season" },
+          "day": { "type": "integer", "minimum": 1, "maximum": 28 },
+          "name": { "type": "string", "minLength": 1, "maxLength": 60 }
+        }
+      }
+    },
+    "married": {
+      "type": "array",
+      "maxItems": 40,
+      "uniqueItems": true,
+      "description": "NPCs married to a player. They are never planned.",
+      "items": { "$ref": "common.schema.json#/$defs/name" }
+    }
+  }
+}
