@@ -10,7 +10,20 @@
     "saveId": { "$ref": "common.schema.json#/$defs/name" },
     "playerName": { "type": "string", "minLength": 1, "maxLength": 40 },
     "day": { "$ref": "common.schema.json#/$defs/gameDay" },
-    "events": { "type": "array", "maxItems": 500, "items": { "$ref": "#/$defs/event" } }
+    "events": { "type": "array", "maxItems": 500, "items": { "$ref": "#/$defs/event" } },
+    "together": {
+      "type": "array",
+      "maxItems": 200,
+      "description": "Groups of NPCs the bridge saw on the same map at the same time today, with or without the player. Gossip passes between them overnight. Optional.",
+      "items": {
+        "type": "object",
+        "required": ["location", "npcs"],
+        "properties": {
+          "location": { "type": "string", "minLength": 1, "maxLength": 80 },
+          "npcs": { "type": "array", "minItems": 2, "maxItems": 40, "uniqueItems": true, "items": { "$ref": "common.schema.json#/$defs/name" } }
+        }
+      }
+    }
   },
   "$defs": {
     "witnesses": {

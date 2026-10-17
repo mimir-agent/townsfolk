@@ -124,10 +124,12 @@ export function gossipNight(town: TownState, night: DayRef, pairs: [string, stri
 }
 
 // Folds a committed day into the town: new facts from the day, then the night's gossip, then
-// the cap. Returns the town unchanged when this night was already applied.
+// the cap. Returns the town unchanged when this exact night was the last one applied: that is a
+// commit that wrote the town but crashed before clearing the pending day, then ran again. An
+// earlier date is applied normally (the player restored an older save backup).
 export function applyNight(town: TownState, day: PendingDay, rng: Rng): TownState {
   const key = dayKey(day.day);
-  if (town.lastNight !== null && town.lastNight >= key) return town;
+  if (town.lastNight === key) return town;
   const withNew: TownState = { ...town, facts: [...town.facts, ...factsFromDay(day)] };
   const after = gossipNight(withNew, day.day, pairsTogether(day), rng);
   return { ...after, lastNight: key, facts: after.facts.slice(-MAX_FACTS) };

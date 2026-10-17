@@ -16,6 +16,18 @@
       "properties": { "hearts": { "type": "number" }, "points": { "type": "number" } }
     },
     "recentChoice": { "$ref": "common.schema.json#/$defs/choice" },
+    "stats": {
+      "type": "object",
+      "description": "Every game stat the bridge could read. The brain filters them per NPC (brain/src/stats.ts) before any prompt; a stat the bridge could not read is left out. Keys not listed here are ignored.",
+      "properties": {
+        "farmName": { "type": "string", "minLength": 1, "maxLength": 40 },
+        "daysPlayed": { "type": "integer", "minimum": 0 },
+        "communityCenterRooms": { "type": "integer", "minimum": 0, "maximum": 6, "description": "Bundle rooms completed." },
+        "deepestMineLevel": { "type": "integer", "minimum": 0 },
+        "farmBuildings": { "type": "array", "maxItems": 100, "items": { "type": "string", "minLength": 1, "maxLength": 40 } },
+        "money": { "type": "integer", "minimum": 0, "description": "Sent so the filter is tested against it. No NPC is allowed to know it." }
+      }
+    },
     "transcript": {
       "type": "array",
       "maxItems": 12,
