@@ -1,0 +1,12 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/mimir-agent/townsfolk/protocol/error-response.schema.json",
+  "title": "Any non-200 response (400, 404, 500). The bridge treats every one of them as brain down.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["v", "error"],
+  "properties": {
+    "v": { "$ref": "common.schema.json#/$defs/v" },
+    "error": { "type": "string", "minLength": 1 }
+  }
+}

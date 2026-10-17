@@ -1,0 +1,53 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/mimir-agent/townsfolk/protocol/day-end-request.schema.json",
+  "title": "POST /v1/day-end request",
+  "description": "Sent at DayEnding, every day, even with no events. The brain holds it as the pending day; nothing reaches memory until POST /v1/saved for the same date. A newer day-end replaces an uncommitted pending day.",
+  "type": "object",
+  "required": ["v", "saveId", "playerName", "day", "events"],
+  "properties": {
+    "v": { "$ref": "common.schema.json#/$defs/v" },
+    "saveId": { "$ref": "common.schema.json#/$defs/name" },
+    "playerName": { "type": "string", "minLength": 1, "maxLength": 40 },
+    "day": { "$ref": "common.schema.json#/$defs/gameDay" },
+    "events": { "type": "array", "maxItems": 500, "items": { "$ref": "#/$defs/event" } }
+  },
+  "$defs": {
+    "witnesses": {
+      "type": "array",
+      "maxItems": 40,
+      "uniqueItems": true,
+      "items": { "$ref": "common.schema.json#/$defs/name" },
+      "description": "Other NPCs in the same location when it happened. Never includes npc itself."
+    },
+    "event": {
+      "type": "object",
+      "required": ["type", "npc", "location", "time", "witnesses"],
+      "properties": {
+        "type": { "enum": ["talk", "gift"] },
+        "npc": { "$ref": "common.schema.json#/$defs/name", "description": "The NPC who took part." },
+        "location": { "type": "string", "minLength": 1, "maxLength": 80 },
+        "time": { "type": "integer", "minimum": 600, "maximum": 2600 },
+        "witnesses": { "$ref": "#/$defs/witnesses" }
+      },
+      "oneOf": [
+        {
+          "properties": {
+            "type": { "const": "talk" },
+            "npcLine": { "type": "string", "minLength": 1, "maxLength": 400 },
+            "playerChoice": { "type": "string", "minLength": 1, "maxLength": 200 }
+          },
+          "required": ["npcLine"]
+        },
+        {
+          "properties": {
+            "type": { "const": "gift" },
+            "item": { "type": "string", "minLength": 1, "maxLength": 80 },
+            "taste": { "type": "string", "minLength": 1, "maxLength": 20 }
+          },
+          "required": ["item"]
+        }
+      ]
+    }
+  }
+}

@@ -1,0 +1,27 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/mimir-agent/townsfolk/protocol/talk-response.schema.json",
+  "title": "POST /v1/talk response (200)",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["v", "line", "choices", "end", "source"],
+  "properties": {
+    "v": { "$ref": "common.schema.json#/$defs/v" },
+    "line": { "type": "string", "minLength": 1, "maxLength": 220 },
+    "choices": {
+      "type": "array",
+      "maxItems": 4,
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["id", "text"],
+        "properties": { "id": { "enum": ["a", "b", "c", "d"] }, "text": { "type": "string", "minLength": 1, "maxLength": 80 } }
+      }
+    },
+    "end": { "type": "boolean" },
+    "source": { "enum": ["model", "fallback"] }
+  },
+  "if": { "properties": { "end": { "const": false } } },
+  "then": { "properties": { "choices": { "type": "array", "minItems": 3 } } },
+  "else": { "properties": { "choices": { "type": "array", "maxItems": 0 } } }
+}

@@ -1,0 +1,32 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/mimir-agent/townsfolk/protocol/talk-request.schema.json",
+  "title": "POST /v1/talk request",
+  "type": "object",
+  "required": ["v", "saveId", "npc", "playerName", "day", "friendship"],
+  "properties": {
+    "v": { "$ref": "common.schema.json#/$defs/v" },
+    "saveId": { "$ref": "common.schema.json#/$defs/name" },
+    "npc": { "$ref": "common.schema.json#/$defs/name" },
+    "playerName": { "type": "string", "minLength": 1, "maxLength": 40 },
+    "day": { "$ref": "common.schema.json#/$defs/gameDay" },
+    "friendship": {
+      "type": "object",
+      "required": ["hearts", "points"],
+      "properties": { "hearts": { "type": "number" }, "points": { "type": "number" } }
+    },
+    "recentChoice": { "$ref": "common.schema.json#/$defs/choice" },
+    "transcript": {
+      "type": "array",
+      "maxItems": 12,
+      "items": {
+        "type": "object",
+        "required": ["speaker", "text"],
+        "properties": {
+          "speaker": { "enum": ["npc", "player"] },
+          "text": { "type": "string", "minLength": 1, "maxLength": 400 }
+        }
+      }
+    }
+  }
+}

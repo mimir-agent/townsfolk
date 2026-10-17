@@ -26,13 +26,16 @@ Rules:
 export function buildPrompt(req: TalkRequest, mem: NpcMemory, mustEnd: boolean): { system: string; user: string } {
   const card = voiceFor(req.npc);
   const memory =
-    mem.entries.length === 0 && mem.summary === ""
+    mem.entries.length === 0 && mem.seasons.length === 0 && mem.years === ""
       ? `You have no memories of ${req.playerName} yet; treat them as someone you are just getting to know.`
       : [
-          `First met ${req.playerName}: ${mem.firstMet ?? "unknown"}. Talks so far: ${mem.talks}. Gifts received: ${mem.gifts}.`,
-          mem.summary ? `Older memories: ${mem.summary}` : "",
-          "Recent days:",
-          ...mem.entries.map((e) => `- ${e.date}: ${e.text}`),
+          mem.firstMet
+            ? `First met ${req.playerName}: ${mem.firstMet}. Talks so far: ${mem.talks}. Gifts received: ${mem.gifts}.`
+            : `You have never spoken with ${req.playerName}; you have only seen them around.`,
+          mem.years ? `Long ago: ${mem.years}` : "",
+          ...mem.seasons.map((s) => `Earlier, ${s.season} of year ${s.year} (by day of month): ${s.text}`),
+          mem.entries.length > 0 ? "Recent days:" : "",
+          ...mem.entries.map((e) => `- ${dateLabel(e.day)}: ${e.text}`),
         ]
           .filter(Boolean)
           .join("\n");
@@ -42,7 +45,7 @@ export function buildPrompt(req: TalkRequest, mem: NpcMemory, mustEnd: boolean):
     `Voice: ${card.voice}`,
     `Now: ${dateLabel(req.day)}, ${req.day.time} (24h clock), weather ${req.day.weather}, at ${req.day.location}.`,
     `Talking with: ${req.playerName}, friendship ${req.friendship.hearts} hearts.`,
-    `Memory (only what ${card.name} witnessed):\n${memory}`,
+    `Memory (only what ${card.name} took part in or saw):\n${memory}`,
     convo ? `Conversation so far:\n${convo}` : `${req.playerName} just walked up to start a conversation.`,
     req.recentChoice ? `${req.playerName} just said: "${req.recentChoice.text}". Respond to that.` : "",
     mustEnd ? `This is the last turn: set "end" to true and close the conversation naturally.` : "",
@@ -59,7 +62,7 @@ function clean(s: string): string {
 
 export class InvalidReply extends Error {}
 
-export function validateReply(raw: string, mustEnd: boolean): Omit<TalkResponse, "source"> {
+export function validateReply(raw: string, mustEnd: boolean): Omit<TalkResponse, "v" | "source"> {
   const start = raw.indexOf("{");
   const end = raw.lastIndexOf("}");
   if (start === -1 || end <= start) throw new InvalidReply("no JSON object in reply");
@@ -91,9 +94,9 @@ export function validateReply(raw: string, mustEnd: boolean): Omit<TalkResponse,
 
 export function fallback(req: TalkRequest, mustEnd: boolean): TalkResponse {
   if (mustEnd || req.recentChoice) {
-    return { line: "Ha, fair enough. Anyway, I should get going. See you around.", choices: [], end: true, source: "fallback" };
+    return { v: 1, line: "Ha, fair enough. Anyway, I should get going. See you around.", choices: [], end: true, source: "fallback" };
   }
-  return { line: "Hm? Sorry, my mind was somewhere else. Good to see you.", choices: [], end: true, source: "fallback" };
+  return { v: 1, line: "Hm? Sorry, my mind was somewhere else. Good to see you.", choices: [], end: true, source: "fallback" };
 }
 
 export function playerTurns(req: TalkRequest): number {
@@ -114,7 +117,7 @@ export async function talk(
     if (remaining < 500) break;
     try {
       const raw = await model.complete(system, user, AbortSignal.timeout(remaining));
-      return { ...validateReply(raw, mustEnd), source: "model" };
+      return { v: 1, ...validateReply(raw, mustEnd), source: "model" };
     } catch (err) {
       opts.log(`talk ${req.npc} attempt ${attempt} failed: ${(err as Error).message}`);
     }
