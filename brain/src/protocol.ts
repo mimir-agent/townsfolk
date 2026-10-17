@@ -99,7 +99,9 @@ export type WorldRequest = {
 export type WorldResponse = { v: 1; ok: true };
 
 // day is the date being planned (tomorrow, seen from the night before).
-export type PlanRequest = { v: 1; saveId: string; playerName: string; day: DayRef; stats: GameStats };
+// hearts: the farmer's friendship hearts with each NPC, so the planner picks each card's heart
+// tier. An NPC left out (or a bridge that sends no map yet) is planned at 0 hearts, the guarded tier.
+export type PlanRequest = { v: 1; saveId: string; playerName: string; day: DayRef; stats: GameStats; hearts: Record<string, number> };
 
 export type ScheduleStop = { time: number; location: string; x: number; y: number; facing: number };
 export type PlannedSchedule = { npc: string; stops: ScheduleStop[] };
@@ -343,5 +345,14 @@ export function parseWorld(v: unknown): WorldRequest {
 
 export function parsePlan(v: unknown): PlanRequest {
   const b = body(v);
-  return { v: 1, saveId: name(b.saveId, "saveId"), playerName: str(b.playerName, "playerName", 40), day: parseDayRef(b.day, "day"), stats: parseStats(b.stats) };
+  return { v: 1, saveId: name(b.saveId, "saveId"), playerName: str(b.playerName, "playerName", 40), day: parseDayRef(b.day, "day"), stats: parseStats(b.stats), hearts: parseHearts(b.hearts) };
+}
+
+// 0 to 14: 10 is the cap for a friend, 14 for a spouse.
+function parseHearts(v: unknown): Record<string, number> {
+  if (v === undefined || v === null) return {};
+  const h = obj(v, "hearts");
+  const out: Record<string, number> = {};
+  for (const [npc, n] of Object.entries(h)) out[name(npc, "hearts key")] = int(n, `hearts.${npc}`, 0, 14);
+  return out;
 }
