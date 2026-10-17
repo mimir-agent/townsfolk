@@ -9,14 +9,17 @@ import { voiceFor } from "./voices.ts";
 
 export const MAX_TURNS = 3;
 export const LINE_MAX = 220;
-export const CHOICE_MAX = 60;
+// The prompt asks for CHOICE_ASK; validation allows up to CHOICE_MAX so a slightly long
+// choice costs nothing, while a runaway one is still refused.
+export const CHOICE_ASK = 45;
+export const CHOICE_MAX = 80;
 
 const SYSTEM = `You write dialogue for one character in Stardew Valley's Pelican Town.
 Reply with ONE JSON object and nothing else: no prose, no markdown fences.
 Shape: {"line": string, "choices": [{"id": string, "text": string}], "end": boolean}
 Rules:
 - "line" is what the character says now: 1 to 3 short sentences, at most ${LINE_MAX} characters, in their voice. No stage directions, no quotation marks around it, no "$" or "#" characters.
-- If "end" is false, give 3 or 4 "choices": things the player could say back, each at most ${CHOICE_MAX} characters, clearly different in tone (for example warm, playful, curious, blunt). ids are "a", "b", "c", "d".
+- If "end" is false, give 3 or 4 "choices": things the player could say back, each a short phrase of at most ${CHOICE_ASK} characters, clearly different in tone (for example warm, playful, curious, blunt). ids are "a", "b", "c", "d".
 - If "end" is true the conversation closes after this line and "choices" is [].
 - The character only knows what is in their memory below and what happens in this conversation. Never invent past events with the player that are not in memory. Do not mention being an AI.`;
 
