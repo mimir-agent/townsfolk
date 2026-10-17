@@ -59,7 +59,8 @@ export function createBrain(deps: BrainDeps): Server {
       if (req.method === "POST" && req.url === "/v1/talk") {
         const body = parseTalk(await readJson(req));
         const mem = await deps.store.load(body.saveId, body.npc);
-        const reply = await talk(body, mem, deps.model, { deadlineMs: deps.talkDeadlineMs, log: deps.log });
+        const town = await deps.store.loadTown(body.saveId);
+        const reply = await talk(body, mem, town, deps.model, { deadlineMs: deps.talkDeadlineMs, log: deps.log });
         deps.log(`talk ${body.npc} ${reply.source} ${Date.now() - started}ms end=${reply.end}`);
         return send(res, 200, reply);
       }

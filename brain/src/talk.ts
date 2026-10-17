@@ -4,7 +4,9 @@
 import type { ModelAdapter } from "./model.ts";
 import type { NpcMemory } from "./memory.ts";
 import { dateLabel } from "./memory.ts";
-import type { Choice, TalkRequest, TalkResponse } from "./protocol.ts";
+import type { Choice, GameStats, TalkRequest, TalkResponse } from "./protocol.ts";
+import { describeStats, statsFor } from "./stats.ts";
+import { knownFactLines, type TownState } from "./town.ts";
 import { voiceFor } from "./voices.ts";
 
 export const MAX_TURNS = 3;
@@ -21,9 +23,23 @@ Rules:
 - "line" is what the character says now: 1 to 3 short sentences, at most ${LINE_MAX} characters, in their voice. No stage directions, no quotation marks around it, no "$" or "#" characters.
 - If "end" is false, give 3 or 4 "choices": things the player could say back, each a short phrase of at most ${CHOICE_ASK} characters, clearly different in tone (for example warm, playful, curious, blunt). ids are "a", "b", "c", "d".
 - If "end" is true the conversation closes after this line and "choices" is [].
-- The character only knows what is in their memory below and what happens in this conversation. Never invent past events with the player that are not in memory. Do not mention being an AI.`;
+- The character only knows what is in their memory below, the facts and stats listed with it, and what happens in this conversation. Never invent past events with the player that are not in memory. Something marked "in confidence" is never repeated to anyone else. Do not mention being an AI.`;
 
-export function buildPrompt(req: TalkRequest, mem: NpcMemory, mustEnd: boolean): { system: string; user: string } {
+// The parts of a prompt that depend on what this NPC knows beyond its own memory: the stats it
+// may know and the facts it holds. Every prompt built for an NPC (talk now, the planner later)
+// goes through here, so the knowledge boundary is enforced in one place.
+export function knowledgeBlock(npc: string, stats: GameStats, town: TownState): string {
+  const statLines = describeStats(statsFor(npc, stats));
+  const factLines = knownFactLines(town, npc);
+  return [
+    statLines.length > 0 ? `What ${npc} knows about the farmer's life here:\n${statLines.join("\n")}` : "",
+    factLines.length > 0 ? `Things ${npc} has heard or been told:\n${factLines.join("\n")}` : "",
+  ]
+    .filter(Boolean)
+    .join("\n\n");
+}
+
+export function buildPrompt(req: TalkRequest, mem: NpcMemory, town: TownState, mustEnd: boolean): { system: string; user: string } {
   const card = voiceFor(req.npc);
   const memory =
     mem.entries.length === 0 && mem.seasons.length === 0 && mem.years === ""
@@ -46,6 +62,7 @@ export function buildPrompt(req: TalkRequest, mem: NpcMemory, mustEnd: boolean):
     `Now: ${dateLabel(req.day)}, ${req.day.time} (24h clock), weather ${req.day.weather}, at ${req.day.location}.`,
     `Talking with: ${req.playerName}, friendship ${req.friendship.hearts} hearts.`,
     `Memory (only what ${card.name} took part in or saw):\n${memory}`,
+    knowledgeBlock(req.npc, req.stats, town),
     convo ? `Conversation so far:\n${convo}` : `${req.playerName} just walked up to start a conversation.`,
     req.recentChoice ? `${req.playerName} just said: "${req.recentChoice.text}". Respond to that.` : "",
     mustEnd ? `This is the last turn: set "end" to true and close the conversation naturally.` : "",
@@ -106,11 +123,12 @@ export function playerTurns(req: TalkRequest): number {
 export async function talk(
   req: TalkRequest,
   mem: NpcMemory,
+  town: TownState,
   model: ModelAdapter,
   opts: { deadlineMs: number; log: (msg: string) => void },
 ): Promise<TalkResponse> {
   const mustEnd = playerTurns(req) >= MAX_TURNS;
-  const { system, user } = buildPrompt(req, mem, mustEnd);
+  const { system, user } = buildPrompt(req, mem, town, mustEnd);
   const deadline = Date.now() + opts.deadlineMs;
   for (let attempt = 1; attempt <= 2; attempt++) {
     const remaining = deadline - Date.now();
