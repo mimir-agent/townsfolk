@@ -65,6 +65,26 @@ Brain settings are environment variables, listed at the top of `brain/src/main.t
 
 Each reply the player can pick moves that NPC's friendship a little (at most 15 points a pick, at most 40 points a day from talk), and some replies leave something the NPC remembers, such as a promise. Promises reach that NPC's memory, its prompts and tomorrow's plan, and can travel as gossip unless they were said in confidence. Talk prompts also carry the NPC's own goal and today's happening if they are in it. Talking to someone at a happening, during it, offers one "join in" reply: picking it gives everyone there a small friendship gain and they all remember the player joined. The happening comes from the night's plan, which the mod does not request yet (slice 6), so in game the join choice does not appear until then; the friendship deltas and remembered facts work now.
 
+## Year simulator and town diary
+
+```sh
+cd brain
+npm run sim -- --days 112 --seed 1          # offline, fake model, a few seconds
+npm run sim -- --adapter claude-cli --days 14 --seed 1   # real model through the claude CLI, slow
+```
+
+The sim starts a real brain on a free localhost port with a throwaway state folder and drives it the way the bridge does: world snapshot once, then each day 2 or 3 seeded conversations (with the join choice when the player walks into a happening), day-end with who spent time together, tomorrow's plan, and the save. The offline fake model builds varied plans from hand-written pieces in `brain/sim/world.ts` with the same seeded RNG, copies yesterday's schedule now and then (so the repeat guard runs), and slips in an invalid part about one night in six (so the validator has something to drop). The same seed always gives the same diary.
+
+It writes one Markdown diary (default `brain/sim-out/`, not committed): per day the plan with each NPC's stops and goal, the happening, the quest, what the player did, gossip that moved overnight, relationship changes and every dropped plan part. The summary at the end lists the checks, and the exit code is 1 if any fails:
+
+- every memory file at most 32 KB on every day
+- the slice 2 canary (told to Emily in confidence on day 1) never reaches another NPC's prompt, memory file or facts
+- no NPC has an identical planned schedule on more than 3 consecutive planned days
+- at least 8 distinct goals started across the cast (enforced for runs of 112 days or more)
+- every plan part the brain returns passes the validator again
+
+With `--adapter claude-cli` the player's picks are still seeded, but the model's answers vary, so that diary does not replay.
+
 ## Development
 
 ```sh
