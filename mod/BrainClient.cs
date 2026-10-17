@@ -7,7 +7,9 @@ using System.Threading.Tasks;
 
 namespace Townsfolk;
 
-// Wire protocol v1. Field names match brain/src/protocol.ts (camelCase on the wire).
+// Wire protocol v1. protocol/*.schema.json is the source; these records mirror it
+// (camelCase on the wire). Every request and response carries V = 1.
+public sealed record DayRef(string Season, int Day, int Year);
 public sealed record GameDay(string Season, int Day, int Year, int Time, string Weather, string Location);
 public sealed record FriendshipInfo(int Hearts, int Points);
 public sealed record TranscriptLine(string Speaker, string Text);
@@ -20,25 +22,40 @@ public sealed record TalkRequest(
     GameDay Day,
     FriendshipInfo Friendship,
     Choice? RecentChoice,
-    List<TranscriptLine> Transcript);
+    List<TranscriptLine> Transcript)
+{
+    public int V { get; init; } = BrainClient.ProtocolVersion;
+}
 
-public sealed record TalkResponse(string Line, List<Choice> Choices, bool End, string Source);
+public sealed record TalkResponse(int V, string Line, List<Choice> Choices, bool End, string Source);
 
+/// <summary>Npc took part. Witnesses are the other villagers in the same location at the time.</summary>
 public sealed record DayEvent(
     string Type,
     string Npc,
     string Location,
     int Time,
+    List<string> Witnesses,
     string? NpcLine = null,
     string? PlayerChoice = null,
     string? Item = null,
     string? Taste = null);
 
-public sealed record DayEndRequest(string SaveId, string PlayerName, GameDay Day, List<DayEvent> Events);
+public sealed record DayEndRequest(string SaveId, string PlayerName, GameDay Day, List<DayEvent> Events)
+{
+    public int V { get; init; } = BrainClient.ProtocolVersion;
+}
+
+public sealed record SavedRequest(string SaveId, DayRef Day)
+{
+    public int V { get; init; } = BrainClient.ProtocolVersion;
+}
 
 /// <summary>HTTP client for the brain. Every method returns null or false on failure and never throws.</summary>
 public sealed class BrainClient
 {
+    public const int ProtocolVersion = 1;
+
     private static readonly JsonSerializerOptions Json = new()
     {
         PropertyNamingPolicy = JsonNamingPolicy.CamelCase,
@@ -63,7 +80,8 @@ public sealed class BrainClient
             if (body is null)
                 return null;
             TalkResponse? res = JsonSerializer.Deserialize<TalkResponse>(body, Json);
-            if (res is null || string.IsNullOrWhiteSpace(res.Line) || res.Choices is null)
+            // A brain that answers in another protocol version is treated as down.
+            if (res is null || res.V != ProtocolVersion || string.IsNullOrWhiteSpace(res.Line) || res.Choices is null)
             {
                 this.log($"brain /v1/talk returned an unusable body: {Truncate(body)}");
                 return null;
@@ -77,19 +95,24 @@ public sealed class BrainClient
         }
     }
 
-    public async Task<bool> DayEnd(DayEndRequest req)
+    public Task<bool> DayEnd(DayEndRequest req) => this.PostOk("v1/day-end", req);
+
+    public Task<bool> Saved(SavedRequest req) => this.PostOk("v1/saved", req);
+
+    private async Task<bool> PostOk<T>(string path, T payload)
     {
         try
         {
-            return await this.Post("v1/day-end", req) is not null;
+            return await this.Post(path, payload) is not null;
         }
         catch (Exception ex)
         {
-            this.log($"brain /v1/day-end failed: {ex.GetType().Name}: {ex.Message}");
+            this.log($"brain /{path} failed: {ex.GetType().Name}: {ex.Message}");
             return false;
         }
     }
 
+    // Any non-2xx (including the 400 a version mismatch gets) is logged and returns null: brain down.
     private async Task<string?> Post<T>(string path, T payload)
     {
         using var content = new StringContent(JsonSerializer.Serialize(payload, Json), Encoding.UTF8, "application/json");

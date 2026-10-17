@@ -1,6 +1,7 @@
 using System;
 using System.Collections.Generic;
 using System.Linq;
+using System.Text.RegularExpressions;
 using System.Threading.Tasks;
 using Microsoft.Xna.Framework;
 using StardewModdingAPI;
@@ -17,11 +18,20 @@ namespace Townsfolk;
 /// </summary>
 public sealed class ModEntry : Mod
 {
+    // protocol/day-end-request.schema.json caps witnesses per event at 40.
+    private const int MaxWitnesses = 40;
+
     private ModConfig config = new();
     private BrainClient brain = null!;
     private readonly List<DayEvent> todaysEvents = new();
     private Conversation? convo;
     private PendingGift? pendingGift;
+
+    // The day handed to the brain at DayEnding, and that request's Task. Saved fires after the
+    // date has already moved on, so it reports this remembered date, and it is sent only once the
+    // day-end request has finished so the brain always sees day-end before saved.
+    private DayRef? endedDay;
+    private Task<bool>? endedDayPost;
 
     public override void Entry(IModHelper helper)
     {
@@ -30,6 +40,7 @@ public sealed class ModEntry : Mod
         helper.Events.Input.ButtonPressed += this.OnButtonPressed;
         helper.Events.GameLoop.UpdateTicked += this.OnUpdateTicked;
         helper.Events.GameLoop.DayEnding += this.OnDayEnding;
+        helper.Events.GameLoop.Saved += this.OnSaved;
         helper.Events.GameLoop.ReturnedToTitle += (_, _) => this.Reset();
         helper.Events.GameLoop.SaveLoaded += (_, _) => this.Reset();
         this.Monitor.Log($"Townsfolk: brain at {this.config.BrainUrl}, NPCs: {(this.config.AllNpcs ? "all" : string.Join(", ", this.config.EnabledNpcs))}", LogLevel.Info);
@@ -40,6 +51,8 @@ public sealed class ModEntry : Mod
         this.todaysEvents.Clear();
         this.convo = null;
         this.pendingGift = null;
+        this.endedDay = null;
+        this.endedDayPost = null;
     }
 
     private bool IsEnabled(NPC npc) =>
@@ -121,7 +134,7 @@ public sealed class ModEntry : Mod
         }
 
         // Mid-conversation failure with no reply at all: end politely so the player is never stuck.
-        reply ??= new TalkResponse("Anyway, I should get going. See you around.", new List<Choice>(), true, "fallback");
+        reply ??= new TalkResponse(BrainClient.ProtocolVersion, "Anyway, I should get going. See you around.", new List<Choice>(), true, "fallback");
 
         if (c.Turns == 0)
             c.Npc.grantConversationFriendship(Game1.player);
@@ -175,9 +188,23 @@ public sealed class ModEntry : Mod
         }
         this.pendingGift = null;
         this.todaysEvents.Add(new DayEvent(
-            "gift", g.Npc.Name, Game1.currentLocation.Name, Game1.timeOfDay,
+            "gift", g.Npc.Name, Game1.currentLocation.Name, Game1.timeOfDay, Witnesses(g.Npc),
             Item: g.Item.DisplayName, Taste: TasteName(g.Npc.getGiftTasteForThisItem(g.Item))));
     }
+
+    // Same rule as "name" in protocol/common.schema.json. A villager added by another mod with a
+    // name outside it is left out as a witness, so one odd name cannot get the whole day refused.
+    private static readonly Regex ProtocolName = new(@"^[\p{L}\p{N}][\p{L}\p{N} ._'-]{0,59}$", RegexOptions.CultureInvariant);
+
+    // Everyone else who could have seen it: the other villagers on the same map right now.
+    // Same location is the whole rule this slice; line of sight and distance are not modelled.
+    private static List<string> Witnesses(NPC subject) =>
+        Game1.currentLocation.characters
+            .Where(other => other.IsVillager && other.Name != subject.Name && ProtocolName.IsMatch(other.Name))
+            .Select(other => other.Name)
+            .Distinct()
+            .Take(MaxWitnesses)
+            .ToList();
 
     private static string TasteName(int taste) => taste switch
     {
@@ -189,21 +216,41 @@ public sealed class ModEntry : Mod
     };
 
     private void Record(NPC npc, string npcLine, string? playerChoice) =>
-        this.todaysEvents.Add(new DayEvent("talk", npc.Name, Game1.currentLocation.Name, Game1.timeOfDay, NpcLine: npcLine, PlayerChoice: playerChoice));
+        this.todaysEvents.Add(new DayEvent("talk", npc.Name, Game1.currentLocation.Name, Game1.timeOfDay, Witnesses(npc), NpcLine: npcLine, PlayerChoice: playerChoice));
 
+    // Sent every night, even with no events: the brain holds it pending until Saved, and an empty
+    // day still replaces a pending day left over from a reload without saving.
     private void OnDayEnding(object? sender, DayEndingEventArgs e)
     {
         this.convo = null;
-        if (this.todaysEvents.Count == 0)
-            return;
-        var req = new DayEndRequest(Constants.SaveFolderName ?? "unknown", Game1.player.Name, Today(), new List<DayEvent>(this.todaysEvents));
+        GameDay today = Today();
+        var req = new DayEndRequest(Constants.SaveFolderName ?? "unknown", Game1.player.Name, today, new List<DayEvent>(this.todaysEvents));
         this.todaysEvents.Clear();
         int count = req.Events.Count;
+        this.endedDay = new DayRef(today.Season, today.Day, today.Year);
         // Fire and forget: never block the save on the brain. A failure is logged inside BrainClient.
-        _ = this.brain.DayEnd(req).ContinueWith(t =>
+        this.endedDayPost = this.brain.DayEnd(req);
+        _ = this.endedDayPost.ContinueWith(t =>
         {
             if (t.Result)
-                this.Monitor.Log($"Sent {count} events to the brain for the night.", LogLevel.Debug);
+                this.Monitor.Log($"Sent {count} events to the brain; they are kept once the game saves.", LogLevel.Debug);
+        });
+    }
+
+    // The save finished, so the day the brain is holding is now real: tell it to commit.
+    private void OnSaved(object? sender, SavedEventArgs e)
+    {
+        if (this.endedDay is not { } day || this.endedDayPost is not { } dayEnd)
+            return;
+        var req = new SavedRequest(Constants.SaveFolderName ?? "unknown", day);
+        this.endedDay = null;
+        this.endedDayPost = null;
+        // Not awaited on the game thread. Runs after day-end finishes, whether it succeeded or not:
+        // if day-end failed the brain has nothing pending for this date and commits nothing.
+        _ = dayEnd.ContinueWith(_ => this.brain.Saved(req), TaskScheduler.Default).Unwrap().ContinueWith(t =>
+        {
+            if (t.Result)
+                this.Monitor.Log($"Brain committed {day.Season} {day.Day}, year {day.Year} to memory.", LogLevel.Debug);
         });
     }
 
