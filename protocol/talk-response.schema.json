@@ -14,12 +14,34 @@
       "items": {
         "type": "object",
         "additionalProperties": false,
-        "required": ["id", "text"],
-        "properties": { "id": { "enum": ["a", "b", "c", "d"] }, "text": { "type": "string", "minLength": 1, "maxLength": 80 } }
+        "required": ["id", "text", "delta"],
+        "properties": {
+          "id": { "enum": ["a", "b", "c", "d"] },
+          "text": { "type": "string", "minLength": 1, "maxLength": 80 },
+          "delta": {
+            "type": "integer",
+            "minimum": -15,
+            "maximum": 15,
+            "description": "Friendship points the bridge adds for this NPC when the player picks this choice; the brain clamps the model's number into -15..15. On the join choice it is the brain's fixed join gain, added for every happening participant."
+          },
+          "fact": { "$ref": "common.schema.json#/$defs/talkFact" },
+          "join": { "const": true, "description": "Only on the one join choice, and only when happening is present." }
+        }
       }
     },
     "end": { "type": "boolean" },
-    "source": { "enum": ["model", "fallback"] }
+    "source": { "enum": ["model", "fallback"] },
+    "happening": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["location", "topic", "participants"],
+      "description": "Present only when one choice is a join choice: the player is talking to a participant at the happening's location during its window. Picking the join choice makes the bridge report a join event whose witnesses are these participants.",
+      "properties": {
+        "location": { "type": "string", "minLength": 1, "maxLength": 80 },
+        "topic": { "type": "string", "minLength": 1, "maxLength": 120 },
+        "participants": { "type": "array", "minItems": 2, "maxItems": 8, "uniqueItems": true, "items": { "$ref": "common.schema.json#/$defs/name" } }
+      }
+    }
   },
   "if": { "properties": { "end": { "const": false } } },
   "then": { "properties": { "choices": { "type": "array", "minItems": 3 } } },

@@ -22,6 +22,12 @@ public sealed class ModEntry : Mod
     // groups of at most 40.
     private const int MaxWitnesses = 40;
     private const int MaxTogether = 200;
+    // protocol/talk-response.schema.json caps one choice's delta at +-15. Re-checked here so a
+    // misbehaving brain can never move friendship more than that in one pick.
+    private const int MaxChoiceDelta = 15;
+    // Conversations can be restarted all day, so talk-driven friendship per NPC per day is capped
+    // too. Same number as the planner's daily friendship cap.
+    private const int MaxTalkDeltaPerDay = 40;
 
     private ModConfig config = new();
     private BrainClient brain = null!;
@@ -31,6 +37,10 @@ public sealed class ModEntry : Mod
     private readonly Dictionary<string, Together> todaysTogether = new();
     private Conversation? convo;
     private PendingGift? pendingGift;
+    // Friendship points talk has moved today, per NPC, so the daily cap holds across conversations.
+    private readonly Dictionary<string, int> talkDeltaToday = new();
+    // The player joined a happening today; the brain offers no second join.
+    private bool joinedToday;
 
     // The day handed to the brain at DayEnding, and that request's Task. Saved fires after the
     // date has already moved on, so it reports this remembered date, and it is sent only once the
@@ -56,6 +66,8 @@ public sealed class ModEntry : Mod
     {
         this.todaysEvents.Clear();
         this.todaysTogether.Clear();
+        this.talkDeltaToday.Clear();
+        this.joinedToday = false;
         this.convo = null;
         this.pendingGift = null;
         this.endedDay = null;
@@ -141,7 +153,7 @@ public sealed class ModEntry : Mod
         }
 
         // Mid-conversation failure with no reply at all: end politely so the player is never stuck.
-        reply ??= new TalkResponse(BrainClient.ProtocolVersion, "Anyway, I should get going. See you around.", new List<Choice>(), true, "fallback");
+        reply ??= new TalkResponse(BrainClient.ProtocolVersion, "Anyway, I should get going. See you around.", new List<TalkChoice>(), true, "fallback");
 
         if (c.Turns == 0)
             c.Npc.grantConversationFriendship(Game1.player);
@@ -168,14 +180,19 @@ public sealed class ModEntry : Mod
 
     private void OnChoice(Conversation c, TalkResponse reply, string answer)
     {
-        Choice? picked = reply.Choices.FirstOrDefault(ch => ch.Id == answer);
+        TalkChoice? picked = reply.Choices.FirstOrDefault(ch => ch.Id == answer);
         if (picked is null)
         {
             this.convo = null;
             return;
         }
-        this.Record(c.Npc, reply.Line, picked.Text);
-        TalkRequest req = this.BuildTalk(c.Npc, c, picked);
+        this.Record(c.Npc, reply.Line, picked.Text, picked.Fact);
+        if (picked.Join == true && reply.Happening is { } h)
+            this.Join(c.Npc, h, picked.Delta);
+        else
+            this.AddTalkFriendship(c.Npc, picked.Delta);
+        var said = new Choice(picked.Id, picked.Text);
+        TalkRequest req = this.BuildTalk(c.Npc, c, said);
         c.Transcript.Add(new TranscriptLine("player", picked.Text));
         c.Npc.doEmote(Character.pauseEmote);
         c.Pending = this.brain.Talk(req);
@@ -222,8 +239,44 @@ public sealed class ModEntry : Mod
         _ => "neutral",
     };
 
-    private void Record(NPC npc, string npcLine, string? playerChoice) =>
-        this.todaysEvents.Add(new DayEvent("talk", npc.Name, Game1.currentLocation.Name, Game1.timeOfDay, Witnesses(npc), NpcLine: npcLine, PlayerChoice: playerChoice));
+    private void Record(NPC npc, string npcLine, string? playerChoice, TalkFact? fact = null) =>
+        this.todaysEvents.Add(new DayEvent("talk", npc.Name, Game1.currentLocation.Name, Game1.timeOfDay, Witnesses(npc), NpcLine: npcLine, PlayerChoice: playerChoice, Fact: fact));
+
+    // Adds a picked reply's friendship points, clamped to the per-choice cap and to what is left
+    // of this NPC's daily talk cap. Points only: hearts follow from points in the game itself.
+    private void AddTalkFriendship(NPC npc, int delta)
+    {
+        int clamped = Math.Clamp(delta, -MaxChoiceDelta, MaxChoiceDelta);
+        this.talkDeltaToday.TryGetValue(npc.Name, out int soFar);
+        int applied = Math.Clamp(soFar + clamped, -MaxTalkDeltaPerDay, MaxTalkDeltaPerDay) - soFar;
+        if (applied == 0)
+            return;
+        this.talkDeltaToday[npc.Name] = soFar + applied;
+        Game1.player.changeFriendship(applied, npc);
+        this.Monitor.Log($"Talk friendship {npc.Name} {applied:+#;-#;0} (asked {delta}).", LogLevel.Trace);
+    }
+
+    // The player joined the happening: every participant witnessed it. One join event, reported
+    // by the NPC the player spoke to, with the other participants as its only witnesses. Each
+    // participant gets the join gain (under the same caps). Participants are the brain's list;
+    // one the game cannot find is left out of the gain but still witnesses it.
+    private void Join(NPC spokenTo, HappeningView h, int gain)
+    {
+        this.joinedToday = true;
+        List<string> others = h.Participants
+            .Where(p => p != spokenTo.Name && ProtocolName.IsMatch(p))
+            .Distinct()
+            .Take(MaxWitnesses)
+            .ToList();
+        this.todaysEvents.Add(new DayEvent("join", spokenTo.Name, h.Location, Game1.timeOfDay, others, Topic: h.Topic));
+        this.AddTalkFriendship(spokenTo, gain);
+        foreach (string name in others)
+        {
+            if (Game1.getCharacterFromName(name) is { } npc)
+                this.AddTalkFriendship(npc, gain);
+        }
+        this.Monitor.Log($"Joined {h.Topic} at {h.Location} with {string.Join(", ", h.Participants)}.", LogLevel.Debug);
+    }
 
     // Sent every night, even with no events: the brain holds it pending until Saved, and an empty
     // day still replaces a pending day left over from a reload without saving.
@@ -234,6 +287,8 @@ public sealed class ModEntry : Mod
         var req = new DayEndRequest(Constants.SaveFolderName ?? "unknown", Game1.player.Name, today, new List<DayEvent>(this.todaysEvents), this.todaysTogether.Values.ToList());
         this.todaysEvents.Clear();
         this.todaysTogether.Clear();
+        this.talkDeltaToday.Clear();
+        this.joinedToday = false;
         int count = req.Events.Count;
         this.endedDay = new DayRef(today.Season, today.Day, today.Year);
         // Fire and forget: never block the save on the brain. A failure is logged inside BrainClient.
@@ -270,7 +325,8 @@ public sealed class ModEntry : Mod
         new FriendshipInfo(Game1.player.getFriendshipHeartLevelForNPC(npc.Name), Game1.player.getFriendshipLevelForNPC(npc.Name)),
         recent,
         new List<TranscriptLine>(c.Transcript),
-        ReadStats());
+        ReadStats(),
+        this.joinedToday ? true : null);
 
     // Every ten game minutes: which villagers share a map right now, wherever the player is.
     private void SampleTogether()

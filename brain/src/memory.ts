@@ -80,6 +80,12 @@ function clock(time: number): string {
 // did not hear it, and sees a gift handed over but not how the receiver felt about it.
 // The key collapses repeats: a witness saw one conversation, not one per turn.
 function describe(e: DayEvent, role: Role, player: string): { key: string; line: string } {
+  // Everyone in a happening was part of it, so the one the player spoke to and the others
+  // remember the join the same way.
+  if (e.type === "join") {
+    const line = `${player} joined us at ${e.location}, ${clock(e.time)}: ${e.topic}.`;
+    return { key: `j:${e.location}:${e.topic}`, line };
+  }
   if (role === "witness") {
     if (e.type === "gift") return { key: `wg:${e.npc}:${e.item}`, line: `I saw ${player} give ${e.npc} ${e.item} at ${e.location}, ${clock(e.time)}.` };
     return { key: `wt:${e.npc}:${e.location}`, line: `I saw ${player} talking with ${e.npc} at ${e.location}, ${clock(e.time)}.` };
@@ -90,7 +96,8 @@ function describe(e: DayEvent, role: Role, player: string): { key: string; line:
     return { key: line, line };
   }
   const reply = e.playerChoice ? ` ${player} answered: "${e.playerChoice}".` : "";
-  const line = `At ${e.location}, ${clock(e.time)}, I said: "${e.npcLine}".${reply}`;
+  const fact = e.fact ? ` I will remember: ${e.fact.text}${e.fact.shareable ? "" : " (told in confidence)"}` : "";
+  const line = `At ${e.location}, ${clock(e.time)}, I said: "${e.npcLine}".${reply}${fact}`;
   return { key: line, line };
 }
 

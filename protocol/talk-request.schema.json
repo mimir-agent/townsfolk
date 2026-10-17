@@ -16,6 +16,7 @@
       "properties": { "hearts": { "type": "number" }, "points": { "type": "number" } }
     },
     "recentChoice": { "$ref": "common.schema.json#/$defs/choice" },
+    "joined": { "type": "boolean", "description": "True once the player has picked a join choice today; no further join choice is offered. Optional, default false." },
     "stats": {
       "type": "object",
       "description": "Every game stat the bridge could read. The brain filters them per NPC (brain/src/stats.ts) before any prompt; a stat the bridge could not read is left out. Keys not listed here are ignored.",

@@ -37,7 +37,7 @@
       "type": "object",
       "required": ["type", "npc", "location", "time", "witnesses"],
       "properties": {
-        "type": { "enum": ["talk", "gift"] },
+        "type": { "enum": ["talk", "gift", "join"] },
         "npc": { "$ref": "common.schema.json#/$defs/name", "description": "The NPC who took part." },
         "location": { "type": "string", "minLength": 1, "maxLength": 80 },
         "time": { "type": "integer", "minimum": 600, "maximum": 2600 },
@@ -48,9 +48,18 @@
           "properties": {
             "type": { "const": "talk" },
             "npcLine": { "type": "string", "minLength": 1, "maxLength": 400 },
-            "playerChoice": { "type": "string", "minLength": 1, "maxLength": 200 }
+            "playerChoice": { "type": "string", "minLength": 1, "maxLength": 200 },
+            "fact": { "$ref": "common.schema.json#/$defs/talkFact", "description": "The fact on the picked choice, if it had one." }
           },
           "required": ["npcLine"]
+        },
+        {
+          "description": "The player picked a join choice. npc is who they were talking to; witnesses are the other participants from the talk response's happening, and nobody else.",
+          "properties": {
+            "type": { "const": "join" },
+            "topic": { "type": "string", "minLength": 1, "maxLength": 120 }
+          },
+          "required": ["topic"]
         },
         {
           "properties": {

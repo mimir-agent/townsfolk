@@ -13,9 +13,9 @@
 import { CAST, type CastMember } from "./cast.ts";
 import { applyDay, dateLabel, dayKey, emptyMemory, shareByNpc, type NpcMemory, type PendingDay } from "./memory.ts";
 import type { ModelAdapter } from "./model.ts";
-import type { DayRef, DroppedPart, GoalView, PlannedSchedule, PlanRequest, PlanResponse, RelationshipShift, ScheduleStop } from "./protocol.ts";
+import type { DayRef, DroppedPart, GoalView, Happening, PlannedSchedule, PlanRequest, PlanResponse, RelationshipShift, ScheduleStop } from "./protocol.ts";
 import { SEASONS } from "./protocol.ts";
-import { knowledgeBlock } from "./talk.ts";
+import { knowledgeBlock, type TalkContext } from "./talk.ts";
 import { relationship, type TownState } from "./town.ts";
 import {
   checkFriendship,
@@ -60,6 +60,9 @@ export type Night = {
   // npc -> its most recent finished or abandoned goals, newest last, so a new goal differs.
   retired: Record<string, string[]>;
   happening: string | null;
+  // The validated happening itself, so a talk that day can offer the join choice. Absent in
+  // records written before slice 4; those nights offer no join.
+  happeningPlan?: Happening | null;
   quest: string | null;
   relationships: RelationshipShift[];
 };
@@ -77,6 +80,19 @@ export function priorNights(state: PlanState, day: DayRef): Night[] {
 
 export function recordNight(state: PlanState, night: Night): PlanState {
   return { ...state, nights: [...priorNights(state, night.day), night].slice(-(HISTORY_NIGHTS + 1)) };
+}
+
+// What a talk on `day` may use from the plans: the NPC's goal as of the latest night planned
+// for that day or earlier, and the happening planned for that exact day if the NPC is in it.
+export function todayFor(state: PlanState, npc: string, day: DayRef): TalkContext {
+  const night = state.nights.filter((n) => dayKey(n.day) <= dayKey(day)).at(-1);
+  if (night === undefined) return { goal: null, happening: null };
+  const g = night.goals[npc];
+  const h = dayKey(night.day) === dayKey(day) ? (night.happeningPlan ?? null) : null;
+  return {
+    goal: g === undefined ? null : { text: g.text, progress: g.progress },
+    happening: h !== null && h.participants.includes(npc) ? h : null,
+  };
 }
 
 export type GoalNeed = "none" | "complete" | "stalled" | "active";
@@ -271,6 +287,7 @@ export async function plan(
     goals: { ...(last?.goals ?? {}) },
     retired: { ...(last?.retired ?? {}) },
     happening: null,
+    happeningPlan: null,
     quest: null,
     relationships: [],
   };
@@ -393,6 +410,7 @@ export async function plan(
     goals,
     retired,
     happening: h.happening ? `${h.happening.topic} at ${h.happening.location} (${h.happening.participants.join(", ")})` : null,
+    happeningPlan: h.happening,
     quest: q.quest ? `${q.quest.from} asks for ${q.quest.item}` : null,
     relationships: r.kept,
   };

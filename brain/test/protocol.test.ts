@@ -43,7 +43,11 @@ test("the schemas reject what the brain rejects", () => {
     ["saved-request", { ...saved, day: { season: "autumn", day: 5, year: 1 } }],
     ["saved-request", { ...saved, day: { season: "spring", day: 29, year: 1 } }],
     ["talk-response", { v: 1, line: "hi", choices: [], end: false, source: "model" }],
-    ["talk-response", { v: 1, line: "hi", choices: [{ id: "a", text: "x" }], end: true, source: "model" }],
+    ["talk-response", { v: 1, line: "hi", choices: [{ id: "a", text: "x", delta: 0 }], end: true, source: "model" }],
+    ["talk-response", { v: 1, line: "hi", choices: [{ id: "a", text: "x" }, { id: "b", text: "y", delta: 0 }, { id: "c", text: "z", delta: 0 }], end: false, source: "model" }],
+    ["talk-response", { v: 1, line: "hi", choices: [{ id: "a", text: "x", delta: 16 }, { id: "b", text: "y", delta: 0 }, { id: "c", text: "z", delta: 0 }], end: false, source: "model" }],
+    ["day-end-request", { ...dayEnd, events: [{ type: "join", npc: "Emily", location: "Saloon", time: 1930, witnesses: ["Gus"] }] }],
+    ["day-end-request", { ...dayEnd, events: [{ type: "talk", npc: "Emily", location: "Saloon", time: 1930, witnesses: [], npcLine: "hi", fact: { text: "x" } }] }],
   ];
   for (const [id, value] of bad) assert.equal(schema(id)(value), false, `${id} should reject ${JSON.stringify(value)}`);
   assertValid("day-end-request", dayEnd);

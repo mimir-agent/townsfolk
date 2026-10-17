@@ -13,7 +13,20 @@ public sealed record DayRef(string Season, int Day, int Year);
 public sealed record GameDay(string Season, int Day, int Year, int Time, string Weather, string Location);
 public sealed record FriendshipInfo(int Hearts, int Points);
 public sealed record TranscriptLine(string Speaker, string Text);
+/// <summary>The reply the player just picked, as sent back in the next talk request.</summary>
 public sealed record Choice(string Id, string Text);
+
+/// <summary>Something the NPC remembers from a picked reply. Shareable false means told in confidence.</summary>
+public sealed record TalkFact(string Text, bool Shareable);
+
+/// <summary>
+/// A reply option. Delta is the friendship points to add on pick (the brain caps it at +-15).
+/// Join is true on the one join choice; its delta goes to every happening participant.
+/// </summary>
+public sealed record TalkChoice(string Id, string Text, int Delta, TalkFact? Fact = null, bool? Join = null);
+
+/// <summary>The happening a join choice is about. Present only when a join choice is offered.</summary>
+public sealed record HappeningView(string Location, string Topic, List<string> Participants);
 
 /// <summary>Every stat the bridge can read. The brain decides which ones each NPC may know.</summary>
 public sealed record GameStats(
@@ -32,14 +45,18 @@ public sealed record TalkRequest(
     FriendshipInfo Friendship,
     Choice? RecentChoice,
     List<TranscriptLine> Transcript,
-    GameStats Stats)
+    GameStats Stats,
+    bool? Joined)
 {
     public int V { get; init; } = BrainClient.ProtocolVersion;
 }
 
-public sealed record TalkResponse(int V, string Line, List<Choice> Choices, bool End, string Source);
+public sealed record TalkResponse(int V, string Line, List<TalkChoice> Choices, bool End, string Source, HappeningView? Happening = null);
 
-/// <summary>Npc took part. Witnesses are the other villagers in the same location at the time.</summary>
+/// <summary>
+/// Npc took part. Witnesses are the other villagers in the same location at the time; for a
+/// join, the other happening participants only.
+/// </summary>
 public sealed record DayEvent(
     string Type,
     string Npc,
@@ -49,7 +66,9 @@ public sealed record DayEvent(
     string? NpcLine = null,
     string? PlayerChoice = null,
     string? Item = null,
-    string? Taste = null);
+    string? Taste = null,
+    TalkFact? Fact = null,
+    string? Topic = null);
 
 /// <summary>NPCs seen on the same map at the same time today. Gossip passes between them overnight.</summary>
 public sealed record Together(string Location, List<string> Npcs);

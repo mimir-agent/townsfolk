@@ -39,11 +39,21 @@ export type TalkRequest = {
   day: GameDay;
   friendship: { hearts: number; points: number };
   recentChoice?: { id: string; text: string };
+  // The player already joined a happening today, so no join choice is offered again.
+  joined?: boolean;
   transcript: TranscriptLine[];
   stats: GameStats;
 };
 
-export type Choice = { id: string; text: string };
+// Something the NPC remembers from a picked reply (a promise, a confession). shareable false
+// means told in confidence.
+export type TalkFact = { text: string; shareable: boolean };
+
+// delta is the friendship change the bridge applies when this choice is picked.
+export type Choice = { id: string; text: string; delta: number; fact?: TalkFact; join?: true };
+
+// The happening a join choice is about, as the bridge needs it to report the join.
+export type HappeningView = { location: string; topic: string; participants: string[] };
 
 export type TalkResponse = {
   v: 1;
@@ -51,14 +61,17 @@ export type TalkResponse = {
   choices: Choice[];
   end: boolean;
   source: "model" | "fallback";
+  happening?: HappeningView;
 };
 
-// npc took part; witnesses are the other NPCs in the same location at the time.
+// npc took part; witnesses are the other NPCs in the same location at the time. For a join,
+// witnesses are the other happening participants only.
 type EventBase = { npc: string; location: string; time: number; witnesses: string[] };
 
 export type DayEvent =
-  | (EventBase & { type: "talk"; npcLine: string; playerChoice?: string })
-  | (EventBase & { type: "gift"; item: string; taste?: string });
+  | (EventBase & { type: "talk"; npcLine: string; playerChoice?: string; fact?: TalkFact })
+  | (EventBase & { type: "gift"; item: string; taste?: string })
+  | (EventBase & { type: "join"; topic: string });
 
 // NPCs the bridge saw on the same map at the same time during the day, whether or not the
 // player was there. Gossip passes between them overnight.
@@ -200,6 +213,7 @@ export function parseTalk(v: unknown): TalkRequest {
     const c = obj(b.recentChoice, "recentChoice");
     recentChoice = { id: str(c.id, "recentChoice.id", 20), text: str(c.text, "recentChoice.text", 200) };
   }
+  if (b.joined !== undefined && typeof b.joined !== "boolean") throw new BadRequest("joined must be a boolean");
   return {
     v: 1,
     saveId: name(b.saveId, "saveId"),
@@ -208,6 +222,7 @@ export function parseTalk(v: unknown): TalkRequest {
     day: parseDay(b.day),
     friendship: { hearts: num(f.hearts, "friendship.hearts"), points: num(f.points, "friendship.points") },
     recentChoice,
+    ...(b.joined === true ? { joined: true } : {}),
     transcript,
     stats: parseStats(b.stats),
   };
@@ -229,6 +244,13 @@ export function parseStats(v: unknown): GameStats {
   }
   if (s.money !== undefined) out.money = int(s.money, "stats.money", 0, Number.MAX_SAFE_INTEGER);
   return out;
+}
+
+function parseTalkFact(v: unknown, where: string): TalkFact | undefined {
+  if (v === undefined || v === null) return undefined;
+  const o = obj(v, where);
+  if (typeof o.shareable !== "boolean") throw new BadRequest(`${where}.shareable must be a boolean`);
+  return { text: str(o.text, `${where}.text`, 200), shareable: o.shareable };
 }
 
 function parseTogether(v: unknown): Together[] | undefined {
@@ -266,12 +288,22 @@ export function parseDayEnd(v: unknown): DayEndRequest {
       witnesses: parseWitnesses(o.witnesses, `events[${i}].witnesses`, npc),
     };
     if (o.type === "talk") {
-      return { type: "talk", ...base, npcLine: str(o.npcLine, `events[${i}].npcLine`, 400), playerChoice: optStr(o.playerChoice, `events[${i}].playerChoice`, 200) };
+      const fact = parseTalkFact(o.fact, `events[${i}].fact`);
+      return {
+        type: "talk",
+        ...base,
+        npcLine: str(o.npcLine, `events[${i}].npcLine`, 400),
+        playerChoice: optStr(o.playerChoice, `events[${i}].playerChoice`, 200),
+        ...(fact ? { fact } : {}),
+      };
     }
     if (o.type === "gift") {
       return { type: "gift", ...base, item: str(o.item, `events[${i}].item`, 80), taste: optStr(o.taste, `events[${i}].taste`, 20) };
     }
-    throw new BadRequest(`events[${i}].type must be talk or gift`);
+    if (o.type === "join") {
+      return { type: "join", ...base, topic: str(o.topic, `events[${i}].topic`, 120) };
+    }
+    throw new BadRequest(`events[${i}].type must be talk, gift or join`);
   });
   const together = parseTogether(b.together);
   return { v: 1, saveId: name(b.saveId, "saveId"), playerName: str(b.playerName, "playerName", 40), day: parseDay(b.day), events, ...(together ? { together } : {}) };
