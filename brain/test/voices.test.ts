@@ -116,3 +116,18 @@ test("planner request: hearts outside 0..14 are refused", async () => {
     assert.equal(bad.status, 400);
   });
 });
+
+test("talk prompt with no memories: only a low-hearts farmer is someone just getting to know", async () => {
+  const model = fakeAdapter([
+    JSON.stringify({ line: "What.", choices: [], end: true }),
+    JSON.stringify({ line: "Hey, you.", choices: [], end: true }),
+  ]);
+  await withServer(model, async (c) => {
+    await c.post("/v1/talk", talkReq({ npc: "Shane", friendship: { hearts: 2, points: 500 } }));
+    await c.post("/v1/talk", talkReq({ npc: "Shane", friendship: { hearts: 8, points: 2000 } }));
+  });
+  const [low, close] = model.calls.map((x) => x.user);
+  assert.match(low!, /just getting to know/);
+  assert.doesNotMatch(close!, /just getting to know/);
+  assert.match(close!, /keep to how close you already are/);
+});
