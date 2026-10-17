@@ -53,17 +53,25 @@ What to expect when something is off:
 - The bridge and brain speak protocol v1 (schemas in `protocol/`). A brain on another version answers 400, and the game treats that as the brain being down.
 - Logs: the brain terminal prints one line per reply; the game side writes to `~/.config/StardewValley/ErrorLogs/SMAPI-latest.txt`.
 
-`config.json` settings: `BrainUrl` (default `http://127.0.0.1:7341`), `EnabledNpcs`, `AllNpcs`, `TimeoutSeconds` (default 8).
+`config.json` settings: `BrainUrl` (default `http://127.0.0.1:7341`), `EnabledNpcs`, `AllNpcs`, `TimeoutSeconds` (default 8), `Planning` (default true; false turns off the overnight plan entirely, conversations keep working), `PlanTimeoutSeconds` (default 150).
 
 Brain settings are environment variables, listed at the top of `brain/src/main.ts`. `TOWNSFOLK_MODEL=fake` runs with canned lines and no model at all; `TOWNSFOLK_MODEL=anthropic` uses `ANTHROPIC_API_KEY` (for players; not tried yet).
 
-## Overnight planner (brain only so far)
+## Overnight planner
 
-`POST /v1/plan` writes tomorrow for the cast of 8 (Abigail, Emily, Gus, Haley, Lewis, Pierre, Robin, Shane): a schedule and a goal per NPC, at most one happening, at most one mailed item quest, and friendship and NPC relationship shifts. The brain checks every part against the world snapshot from `POST /v1/world` and drops what fails, one part at a time, with a reason in the log. A schedule that repeats one of the NPC's last 7 gets one regen, then that NPC runs vanilla. Plan history is kept in `_plans.json` next to the memory files. The mod does not call these endpoints yet (slice 6), so nothing changes in game.
+`POST /v1/plan` writes tomorrow for the cast of 8 (Abigail, Emily, Gus, Haley, Lewis, Pierre, Robin, Shane): a schedule and a goal per NPC, at most one happening, at most one mailed item quest, and friendship and NPC relationship shifts. The brain checks every part against the world snapshot from `POST /v1/world` and drops what fails, one part at a time, with a reason in the log. A schedule that repeats one of the NPC's last 7 gets one regen, then that NPC runs vanilla. Plan history is kept in `_plans.json` next to the memory files.
+
+In game (`mod/Planner.cs`): at save load the mod sends the world (locations with sizes, quest-worthy items, festival days, married NPCs). When the day ends it asks for tomorrow's plan without waiting. About a second after the next morning starts, if the plan is in, the mod applies it:
+
+- Schedules: each planned NPC gets a schedule for today's date through `Characters/schedules/<Name>`. The mod first re-checks every stop against the live game (the location exists, the tile is on the map and passable, there is a walking route from the NPC's home); one failing stop keeps that NPC on their vanilla day. A vanilla schedule already written for this exact date wins.
+- Quest: one item-delivery quest with a `townsfolk_` id, added to `Data/Quests` and `Data/mail` and sent as a letter that adds the quest when read. Only from someone the player has met. The mod keeps the quests it has sent in `Mods/Townsfolk/data/<save folder>.json` so they still exist after a restart. Vanilla quest and mail entries are never edited.
+- Friendship: each shift is added toward the player, for NPCs the player has already met.
+
+If the plan is not in by morning, the day starts vanilla; a plan that arrives before noon still applies (the NPCs walk to their planned stop from wherever they are). Brain down, a wrong day, a fallback plan or a festival: the day stays vanilla. Each failure is one line in the SMAPI log.
 
 ## Conversations with consequences
 
-Each reply the player can pick moves that NPC's friendship a little (at most 15 points a pick, at most 40 points a day from talk), and some replies leave something the NPC remembers, such as a promise. Promises reach that NPC's memory, its prompts and tomorrow's plan, and can travel as gossip unless they were said in confidence. Talk prompts also carry the NPC's own goal and today's happening if they are in it. Talking to someone at a happening, during it, offers one "join in" reply: picking it gives everyone there a small friendship gain and they all remember the player joined. The happening comes from the night's plan, which the mod does not request yet (slice 6), so in game the join choice does not appear until then; the friendship deltas and remembered facts work now.
+Each reply the player can pick moves that NPC's friendship a little (at most 15 points a pick, at most 40 points a day from talk), and some replies leave something the NPC remembers, such as a promise. Promises reach that NPC's memory, its prompts and tomorrow's plan, and can travel as gossip unless they were said in confidence. Talk prompts also carry the NPC's own goal and today's happening if they are in it. Talking to someone at a happening, during it, offers one "join in" reply: picking it gives everyone there a small friendship gain and they all remember the player joined. The happening comes from the night's plan, so the join choice appears only on days the mod applied a plan.
 
 ## Year simulator and town diary
 

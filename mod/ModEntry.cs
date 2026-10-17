@@ -31,6 +31,7 @@ public sealed class ModEntry : Mod
 
     private ModConfig config = new();
     private BrainClient brain = null!;
+    private Planner? planner;
     private readonly List<DayEvent> todaysEvents = new();
     // Groups of villagers seen on the same map today, keyed by location and sorted names so a
     // group that stands still all afternoon is sent once.
@@ -51,15 +52,25 @@ public sealed class ModEntry : Mod
     public override void Entry(IModHelper helper)
     {
         this.config = helper.ReadConfig<ModConfig>();
-        this.brain = new BrainClient(this.config.BrainUrl, this.config.TimeoutSeconds, msg => this.Monitor.Log(msg, LogLevel.Warn));
+        this.brain = new BrainClient(this.config.BrainUrl, this.config.TimeoutSeconds, this.config.PlanTimeoutSeconds, msg => this.Monitor.Log(msg, LogLevel.Warn));
+        // With planning off the planner is never built: no world, no plan requests, no asset edits.
+        this.planner = this.config.Planning ? new Planner(helper, this.Monitor, this.brain) : null;
         helper.Events.Input.ButtonPressed += this.OnButtonPressed;
         helper.Events.GameLoop.UpdateTicked += this.OnUpdateTicked;
         helper.Events.GameLoop.TimeChanged += (_, _) => this.SampleTogether();
         helper.Events.GameLoop.DayEnding += this.OnDayEnding;
         helper.Events.GameLoop.Saved += this.OnSaved;
-        helper.Events.GameLoop.ReturnedToTitle += (_, _) => this.Reset();
-        helper.Events.GameLoop.SaveLoaded += (_, _) => this.Reset();
-        this.Monitor.Log($"Townsfolk: brain at {this.config.BrainUrl}, NPCs: {(this.config.AllNpcs ? "all" : string.Join(", ", this.config.EnabledNpcs))}", LogLevel.Info);
+        helper.Events.GameLoop.ReturnedToTitle += (_, _) =>
+        {
+            this.Reset();
+            this.planner?.Reset();
+        };
+        helper.Events.GameLoop.SaveLoaded += (_, _) =>
+        {
+            this.Reset();
+            this.planner?.OnSaveLoaded();
+        };
+        this.Monitor.Log($"Townsfolk: brain at {this.config.BrainUrl}, NPCs: {(this.config.AllNpcs ? "all" : string.Join(", ", this.config.EnabledNpcs))}, planning {(this.config.Planning ? "on" : "off")}", LogLevel.Info);
     }
 
     private void Reset()
@@ -123,6 +134,7 @@ public sealed class ModEntry : Mod
     private void OnUpdateTicked(object? sender, UpdateTickedEventArgs e)
     {
         this.CheckGift();
+        this.planner?.OnUpdateTicked();
 
         if (this.convo?.Pending is not { IsCompleted: true } done)
             return;
@@ -218,7 +230,7 @@ public sealed class ModEntry : Mod
 
     // Same rule as "name" in protocol/common.schema.json. A villager added by another mod with a
     // name outside it is left out as a witness, so one odd name cannot get the whole day refused.
-    private static readonly Regex ProtocolName = new(@"^[\p{L}\p{N}][\p{L}\p{N} ._'-]{0,59}$", RegexOptions.CultureInvariant);
+    internal static readonly Regex ProtocolName = new(@"^[\p{L}\p{N}][\p{L}\p{N} ._'-]{0,59}$", RegexOptions.CultureInvariant);
 
     // Everyone else who could have seen it: the other villagers on the same map right now.
     // Same location is the whole rule this slice; line of sight and distance are not modelled.
@@ -298,6 +310,8 @@ public sealed class ModEntry : Mod
             if (t.Result)
                 this.Monitor.Log($"Sent {count} events to the brain; they are kept once the game saves.", LogLevel.Debug);
         });
+        // Tomorrow's plan is asked for once day-end lands; the planner reads it in the morning.
+        this.planner?.OnDayEnding(this.endedDayPost, new PlanRequest(Constants.SaveFolderName ?? "unknown", Game1.player.Name, Planner.Tomorrow(), ReadStats()));
     }
 
     // The save finished, so the day the brain is holding is now real: tell it to commit.

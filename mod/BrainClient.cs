@@ -83,6 +83,42 @@ public sealed record SavedRequest(string SaveId, DayRef Day)
     public int V { get; init; } = BrainClient.ProtocolVersion;
 }
 
+public sealed record WorldLocation(string Name, int Width, int Height);
+public sealed record WorldItem(string Id, string Name);
+public sealed record WorldFestival(string Season, int Day, string Name);
+
+/// <summary>Sent at save load: what the brain's plan validator checks every plan against.</summary>
+public sealed record WorldRequest(string SaveId, List<WorldLocation> Locations, List<WorldItem> Items, List<WorldFestival> Festivals, List<string> Married)
+{
+    public int V { get; init; } = BrainClient.ProtocolVersion;
+}
+
+/// <summary>Asks for the plan for Day, the day about to start.</summary>
+public sealed record PlanRequest(string SaveId, string PlayerName, DayRef Day, GameStats Stats)
+{
+    public int V { get; init; } = BrainClient.ProtocolVersion;
+}
+
+/// <summary>Sets off at Time for tile (X, Y) of Location, facing 0 up, 1 right, 2 down, 3 left.</summary>
+public sealed record PlanStop(int Time, string Location, int X, int Y, int Facing);
+public sealed record PlannedSchedule(string Npc, List<PlanStop> Stops);
+public sealed record MailQuest(string Id, string Item, string From, int Reward, string Text);
+public sealed record FriendshipShift(string Npc, int Delta, string Reason);
+public sealed record DroppedPart(string Part, string Reason);
+
+/// <summary>
+/// The parts of a plan response the bridge applies. Goals, happening and relationships stay on
+/// the brain side (talk reads them from the brain's own plan store), so they are not mirrored here.
+/// </summary>
+public sealed record PlanResponse(
+    int V,
+    DayRef Day,
+    string Source,
+    List<PlannedSchedule> Schedules,
+    MailQuest? Quest,
+    List<FriendshipShift> Friendship,
+    List<DroppedPart> Dropped);
+
 /// <summary>HTTP client for the brain. Every method returns null or false on failure and never throws.</summary>
 public sealed class BrainClient
 {
@@ -96,11 +132,15 @@ public sealed class BrainClient
     };
 
     private readonly HttpClient http;
+    // The plan takes minutes with a real model, so it has its own client and its own timeout.
+    private readonly HttpClient planHttp;
     private readonly Action<string> log;
 
-    public BrainClient(string baseUrl, int timeoutSeconds, Action<string> log)
+    public BrainClient(string baseUrl, int timeoutSeconds, int planTimeoutSeconds, Action<string> log)
     {
-        this.http = new HttpClient { BaseAddress = new Uri(baseUrl.TrimEnd('/') + "/"), Timeout = TimeSpan.FromSeconds(timeoutSeconds) };
+        var baseAddress = new Uri(baseUrl.TrimEnd('/') + "/");
+        this.http = new HttpClient { BaseAddress = baseAddress, Timeout = TimeSpan.FromSeconds(timeoutSeconds) };
+        this.planHttp = new HttpClient { BaseAddress = baseAddress, Timeout = TimeSpan.FromSeconds(planTimeoutSeconds) };
         this.log = log;
     }
 
@@ -108,7 +148,7 @@ public sealed class BrainClient
     {
         try
         {
-            string? body = await this.Post("v1/talk", req);
+            string? body = await this.Post("v1/talk", req, this.http);
             if (body is null)
                 return null;
             TalkResponse? res = JsonSerializer.Deserialize<TalkResponse>(body, Json);
@@ -131,11 +171,35 @@ public sealed class BrainClient
 
     public Task<bool> Saved(SavedRequest req) => this.PostOk("v1/saved", req);
 
+    public Task<bool> World(WorldRequest req) => this.PostOk("v1/world", req);
+
+    public async Task<PlanResponse?> Plan(PlanRequest req)
+    {
+        try
+        {
+            string? body = await this.Post("v1/plan", req, this.planHttp);
+            if (body is null)
+                return null;
+            PlanResponse? res = JsonSerializer.Deserialize<PlanResponse>(body, Json);
+            if (res is null || res.V != ProtocolVersion || res.Day is null || res.Schedules is null || res.Friendship is null || res.Dropped is null)
+            {
+                this.log($"brain /v1/plan returned an unusable body: {Truncate(body)}");
+                return null;
+            }
+            return res;
+        }
+        catch (Exception ex)
+        {
+            this.log($"brain /v1/plan failed: {ex.GetType().Name}: {ex.Message}");
+            return null;
+        }
+    }
+
     private async Task<bool> PostOk<T>(string path, T payload)
     {
         try
         {
-            return await this.Post(path, payload) is not null;
+            return await this.Post(path, payload, this.http) is not null;
         }
         catch (Exception ex)
         {
@@ -145,10 +209,10 @@ public sealed class BrainClient
     }
 
     // Any non-2xx (including the 400 a version mismatch gets) is logged and returns null: brain down.
-    private async Task<string?> Post<T>(string path, T payload)
+    private async Task<string?> Post<T>(string path, T payload, HttpClient client)
     {
         using var content = new StringContent(JsonSerializer.Serialize(payload, Json), Encoding.UTF8, "application/json");
-        using HttpResponseMessage res = await this.http.PostAsync(path, content);
+        using HttpResponseMessage res = await client.PostAsync(path, content);
         string body = await res.Content.ReadAsStringAsync();
         if (!res.IsSuccessStatusCode)
         {
