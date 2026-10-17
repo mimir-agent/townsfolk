@@ -139,7 +139,7 @@ export const CARDS: Readonly<Record<string, Card>> = {
     household: "Married to Demetrius; mother of Maru and of Sebastian, her son from an earlier relationship. Home and shop are the same house on Mountain Road. Her own parents never understood her choosing carpentry. Birthday fall 21.",
     close: ["Demetrius, Maru and Sebastian, her family; she wishes Sebastian would open up more", "Caroline, Jodi, Marnie and Emily from the Tuesday exercise class", "Lewis, who welcomed the farmer to town with her", "Gus's Saloon, where she dances with Demetrius on Fridays"],
     atOdds: ["Lewis, when she pushes him on business tax"],
-    habits: "Shop open 8 to 5 except Tuesdays and part of Fridays. Builds farm buildings and closes the shop while she does. Stays in when it rains unless she is building. Evenings outside on the mountain or in the kitchen.",
+    habits: "Shop open 9 to 5 except Tuesdays and part of Fridays. Builds farm buildings and closes the shop while she does. Stays in when it rains unless she is building. Evenings outside on the mountain or in the kitchen.",
     likes: ["goat cheese", "peach", "spaghetti", "Woody's Secret"],
     dislikes: ["holly", "shoddy work"],
     topics: ["building and wood", "the farm's next project", "her kids", "the Community Center", "exercise class", "taxes on small business"],
