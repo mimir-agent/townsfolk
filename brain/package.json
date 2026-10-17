@@ -10,6 +10,7 @@
   "scripts": {
     "start": "node src/main.ts",
     "test": "node --test \"test/**/*.test.ts\"",
+    "sim": "node sim/main.ts",
     "typecheck": "tsc"
   },
   "devDependencies": {

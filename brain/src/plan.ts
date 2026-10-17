@@ -140,7 +140,7 @@ function memoryLines(mem: NpcMemory): string {
   return text.length <= PLAN_MEMORY_CHARS ? text : `...${text.slice(text.length - PLAN_MEMORY_CHARS + 3)}`;
 }
 
-function nextDay(d: DayRef): DayRef {
+export function nextDay(d: DayRef): DayRef {
   if (d.day < 28) return { ...d, day: d.day + 1 };
   const s = SEASONS.indexOf(d.season);
   return s === 3 ? { season: "spring", day: 1, year: d.year + 1 } : { season: SEASONS[s + 1]!, day: 1, year: d.year };
