@@ -16,4 +16,16 @@ public sealed class ModConfig
 
     /// <summary>How long to wait for one reply before giving up and keeping vanilla dialogue.</summary>
     public int TimeoutSeconds { get; set; } = 8;
+
+    /// <summary>
+    /// When false, the bridge never sends the world or asks for a plan: schedules, quests and
+    /// overnight friendship stay vanilla. Conversations are not affected.
+    /// </summary>
+    public bool Planning { get; set; } = true;
+
+    /// <summary>
+    /// How long to wait for tomorrow's plan. The brain gives up on its own at 120 seconds
+    /// (TOWNSFOLK_PLAN_MS); this is a little longer so the brain's answer, even a fallback, arrives.
+    /// </summary>
+    public int PlanTimeoutSeconds { get; set; } = 150;
 }
