@@ -19,6 +19,18 @@ export type GameDay = DayRef & {
 
 export type TranscriptLine = { speaker: "npc" | "player"; text: string };
 
+// Game stats the bridge can read cheaply. The bridge sends all of them; the brain decides which
+// ones each NPC may know (stats.ts). Every field is optional: a stat the bridge could not read
+// is left out, never guessed.
+export type GameStats = {
+  farmName?: string;
+  daysPlayed?: number;
+  communityCenterRooms?: number;
+  deepestMineLevel?: number;
+  farmBuildings?: string[];
+  money?: number;
+};
+
 export type TalkRequest = {
   v: 1;
   saveId: string;
@@ -28,6 +40,7 @@ export type TalkRequest = {
   friendship: { hearts: number; points: number };
   recentChoice?: { id: string; text: string };
   transcript: TranscriptLine[];
+  stats: GameStats;
 };
 
 export type Choice = { id: string; text: string };
@@ -47,7 +60,11 @@ export type DayEvent =
   | (EventBase & { type: "talk"; npcLine: string; playerChoice?: string })
   | (EventBase & { type: "gift"; item: string; taste?: string });
 
-export type DayEndRequest = { v: 1; saveId: string; playerName: string; day: GameDay; events: DayEvent[] };
+// NPCs the bridge saw on the same map at the same time during the day, whether or not the
+// player was there. Gossip passes between them overnight.
+export type Together = { location: string; npcs: string[] };
+
+export type DayEndRequest = { v: 1; saveId: string; playerName: string; day: GameDay; events: DayEvent[]; together?: Together[] };
 export type DayEndResponse = { v: 1; ok: true; pending: string[] };
 
 export type SavedRequest = { v: 1; saveId: string; day: DayRef };
@@ -62,6 +79,8 @@ export class BadRequest extends Error {}
 // apostrophe, underscore, hyphen. A leading dot is refused so "." and ".." cannot appear.
 const NAME = /^[\p{L}\p{N}][\p{L}\p{N} ._'-]{0,59}$/u;
 const MAX_WITNESSES = 40;
+const MAX_TOGETHER = 200;
+const MAX_BUILDINGS = 100;
 
 function obj(v: unknown, where: string): Record<string, unknown> {
   if (typeof v !== "object" || v === null || Array.isArray(v)) throw new BadRequest(`${where} must be an object`);
@@ -140,7 +159,40 @@ export function parseTalk(v: unknown): TalkRequest {
     friendship: { hearts: num(f.hearts, "friendship.hearts"), points: num(f.points, "friendship.points") },
     recentChoice,
     transcript,
+    stats: parseStats(b.stats),
   };
+}
+
+// Only the known keys are read, so a stat a newer bridge adds can never reach a prompt until
+// stats.ts says who may know it.
+export function parseStats(v: unknown): GameStats {
+  if (v === undefined || v === null) return {};
+  const s = obj(v, "stats");
+  const out: GameStats = {};
+  if (s.farmName !== undefined) out.farmName = str(s.farmName, "stats.farmName", 40);
+  if (s.daysPlayed !== undefined) out.daysPlayed = int(s.daysPlayed, "stats.daysPlayed", 0, Number.MAX_SAFE_INTEGER);
+  if (s.communityCenterRooms !== undefined) out.communityCenterRooms = int(s.communityCenterRooms, "stats.communityCenterRooms", 0, 6);
+  if (s.deepestMineLevel !== undefined) out.deepestMineLevel = int(s.deepestMineLevel, "stats.deepestMineLevel", 0, Number.MAX_SAFE_INTEGER);
+  if (s.farmBuildings !== undefined) {
+    if (!Array.isArray(s.farmBuildings) || s.farmBuildings.length > MAX_BUILDINGS) throw new BadRequest(`stats.farmBuildings must be an array of at most ${MAX_BUILDINGS}`);
+    out.farmBuildings = s.farmBuildings.map((x, i) => str(x, `stats.farmBuildings[${i}]`, 40));
+  }
+  if (s.money !== undefined) out.money = int(s.money, "stats.money", 0, Number.MAX_SAFE_INTEGER);
+  return out;
+}
+
+function parseTogether(v: unknown): Together[] | undefined {
+  if (v === undefined || v === null) return undefined;
+  if (!Array.isArray(v) || v.length > MAX_TOGETHER) throw new BadRequest(`together must be an array of at most ${MAX_TOGETHER}`);
+  return v.map((g, i): Together => {
+    const o = obj(g, `together[${i}]`);
+    if (!Array.isArray(o.npcs) || o.npcs.length < 2 || o.npcs.length > MAX_WITNESSES) {
+      throw new BadRequest(`together[${i}].npcs must be an array of 2..${MAX_WITNESSES} names`);
+    }
+    const npcs = o.npcs.map((n, j) => name(n, `together[${i}].npcs[${j}]`));
+    if (new Set(npcs).size !== npcs.length) throw new BadRequest(`together[${i}].npcs has duplicates`);
+    return { location: str(o.location, `together[${i}].location`, 80), npcs };
+  });
 }
 
 function parseWitnesses(v: unknown, where: string, npc: string): string[] {
@@ -171,7 +223,8 @@ export function parseDayEnd(v: unknown): DayEndRequest {
     }
     throw new BadRequest(`events[${i}].type must be talk or gift`);
   });
-  return { v: 1, saveId: name(b.saveId, "saveId"), playerName: str(b.playerName, "playerName", 40), day: parseDay(b.day), events };
+  const together = parseTogether(b.together);
+  return { v: 1, saveId: name(b.saveId, "saveId"), playerName: str(b.playerName, "playerName", 40), day: parseDay(b.day), events, ...(together ? { together } : {}) };
 }
 
 export function parseSaved(v: unknown): SavedRequest {

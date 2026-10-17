@@ -18,12 +18,17 @@ namespace Townsfolk;
 /// </summary>
 public sealed class ModEntry : Mod
 {
-    // protocol/day-end-request.schema.json caps witnesses per event at 40.
+    // protocol/day-end-request.schema.json caps witnesses per event at 40, and together at 200
+    // groups of at most 40.
     private const int MaxWitnesses = 40;
+    private const int MaxTogether = 200;
 
     private ModConfig config = new();
     private BrainClient brain = null!;
     private readonly List<DayEvent> todaysEvents = new();
+    // Groups of villagers seen on the same map today, keyed by location and sorted names so a
+    // group that stands still all afternoon is sent once.
+    private readonly Dictionary<string, Together> todaysTogether = new();
     private Conversation? convo;
     private PendingGift? pendingGift;
 
@@ -39,6 +44,7 @@ public sealed class ModEntry : Mod
         this.brain = new BrainClient(this.config.BrainUrl, this.config.TimeoutSeconds, msg => this.Monitor.Log(msg, LogLevel.Warn));
         helper.Events.Input.ButtonPressed += this.OnButtonPressed;
         helper.Events.GameLoop.UpdateTicked += this.OnUpdateTicked;
+        helper.Events.GameLoop.TimeChanged += (_, _) => this.SampleTogether();
         helper.Events.GameLoop.DayEnding += this.OnDayEnding;
         helper.Events.GameLoop.Saved += this.OnSaved;
         helper.Events.GameLoop.ReturnedToTitle += (_, _) => this.Reset();
@@ -49,6 +55,7 @@ public sealed class ModEntry : Mod
     private void Reset()
     {
         this.todaysEvents.Clear();
+        this.todaysTogether.Clear();
         this.convo = null;
         this.pendingGift = null;
         this.endedDay = null;
@@ -224,8 +231,9 @@ public sealed class ModEntry : Mod
     {
         this.convo = null;
         GameDay today = Today();
-        var req = new DayEndRequest(Constants.SaveFolderName ?? "unknown", Game1.player.Name, today, new List<DayEvent>(this.todaysEvents));
+        var req = new DayEndRequest(Constants.SaveFolderName ?? "unknown", Game1.player.Name, today, new List<DayEvent>(this.todaysEvents), this.todaysTogether.Values.ToList());
         this.todaysEvents.Clear();
+        this.todaysTogether.Clear();
         int count = req.Events.Count;
         this.endedDay = new DayRef(today.Season, today.Day, today.Year);
         // Fire and forget: never block the save on the brain. A failure is logged inside BrainClient.
@@ -261,7 +269,53 @@ public sealed class ModEntry : Mod
         Today(),
         new FriendshipInfo(Game1.player.getFriendshipHeartLevelForNPC(npc.Name), Game1.player.getFriendshipLevelForNPC(npc.Name)),
         recent,
-        new List<TranscriptLine>(c.Transcript));
+        new List<TranscriptLine>(c.Transcript),
+        ReadStats());
+
+    // Every ten game minutes: which villagers share a map right now, wherever the player is.
+    private void SampleTogether()
+    {
+        if (!Context.IsWorldReady || this.todaysTogether.Count >= MaxTogether)
+            return;
+        foreach (GameLocation location in Game1.locations)
+        {
+            List<string> names = location.characters
+                .Where(c => c.IsVillager && ProtocolName.IsMatch(c.Name))
+                .Select(c => c.Name)
+                .Distinct()
+                .OrderBy(n => n, StringComparer.Ordinal)
+                .Take(MaxWitnesses)
+                .ToList();
+            if (names.Count < 2)
+                continue;
+            string key = $"{location.Name}|{string.Join(",", names)}";
+            if (!this.todaysTogether.ContainsKey(key))
+                this.todaysTogether[key] = new Together(location.Name, names);
+            if (this.todaysTogether.Count >= MaxTogether)
+                return;
+        }
+    }
+
+    // All stats the brain's table knows about. Which NPC may know which is the brain's call.
+    private static GameStats ReadStats()
+    {
+        Farmer p = Game1.player;
+        int? ccRooms = Game1.getLocationFromName("CommunityCenter") is StardewValley.Locations.CommunityCenter cc
+            ? cc.areasComplete.Count(done => done)
+            : null;
+        List<string> buildings = Game1.getFarm().buildings
+            .Select(b => b.buildingType.Value)
+            .Where(t => !string.IsNullOrEmpty(t))
+            .Take(100)
+            .ToList();
+        return new GameStats(
+            string.IsNullOrWhiteSpace(p.farmName.Value) ? null : p.farmName.Value[..Math.Min(p.farmName.Value.Length, 40)],
+            (int)Game1.stats.DaysPlayed,
+            ccRooms,
+            p.deepestMineLevel,
+            buildings,
+            p.Money);
+    }
 
     private static GameDay Today() => new(
         Game1.currentSeason,

@@ -13,6 +13,12 @@ const CARDS: Record<string, string> = {
     "Bright, earnest, spiritual. Sews her own clothes, believes in good energy and dreams that mean something. Generous and upbeat, sometimes drifts into a tangent about crystals or colors. Never cynical.",
   Shane:
     "Tired, guarded, sharp-tongued, works a job he doesn't love. Pushes people away at first, softens slowly with patience. Cares about his chickens and his goddaughter more than he admits. Blunt, short, occasionally self-deprecating.",
+  Gus:
+    "Runs the saloon and treats it like a living room for the whole town. Big-hearted, jolly, a natural host who remembers everyone's usual order. Loves cooking and talks about recipes with real joy. Notices when someone is struggling and offers food before advice.",
+  Haley:
+    "Image-conscious and used to being admired; can come off cool or dismissive with people she has not decided about yet. Loves photography, fashion and sunny days at the beach. Underneath, more thoughtful than she lets on, and warms up a lot once someone earns it. Breezy, a little vain, honest when it counts.",
+  Robin:
+    "The town carpenter, practical and upbeat, happiest with a project on the go. Takes pride in sturdy work and talks about wood, tools and what could be built next. Friendly and direct, the kind of neighbor who rolls up her sleeves to help. Juggles her family with good humor and the odd sigh.",
 };
 
 export function hasCard(npc: string): boolean {

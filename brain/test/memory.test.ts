@@ -8,6 +8,7 @@ import { applyDay, emptyMemory, fileBytes, MAX_ENTRIES, MAX_FILE_BYTES, shareByN
 import { DEFAULT_FAKE_REPLY, fakeAdapter } from "../src/model.ts";
 import { SEASONS, type DayEndRequest, type DayEvent, type DayRef, type GameDay } from "../src/protocol.ts";
 import { talk } from "../src/talk.ts";
+import { emptyTown } from "../src/town.ts";
 import { talkReq, tempStore, withServer } from "./helpers.ts";
 
 const SAVE = "Farm_123";
@@ -65,7 +66,7 @@ test("done-when 1: Pierre witnesses a gift to Emily, Shane is elsewhere; after s
     assert.equal(pierreMem.firstMet, null);
     assert.equal(pierreMem.gifts, 0);
     const model = fakeAdapter([DEFAULT_FAKE_REPLY]);
-    await talk(talkReq({ npc: "Pierre" }), pierreMem, model, { deadlineMs: 5000, log: () => {} });
+    await talk(talkReq({ npc: "Pierre" }), pierreMem, emptyTown(), model, { deadlineMs: 5000, log: () => {} });
     assert.match(model.calls[0]!.user, /never spoken with Tae/);
     assert.match(model.calls[0]!.user, /I saw Tae give Emily Amethyst/);
   });
@@ -192,5 +193,5 @@ test("a v1 memory file from the tonight slice is read and kept", async () => {
   const after = await store.load(SAVE, "Abigail");
   assert.equal(after.entries.length, 2);
   assert.equal(after.talks, 3);
-  assert.deepEqual((await readdir(join(store.dir, SAVE))).sort(), ["Abigail.json", "Emily.json", "Pierre.json"]);
+  assert.deepEqual((await readdir(join(store.dir, SAVE))).sort(), ["Abigail.json", "Emily.json", "Pierre.json", "_town.json"]);
 });

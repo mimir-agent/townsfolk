@@ -12,11 +12,16 @@
 //            that rolled out of entries
 //   years    one short summary of every season older than that
 // fitToBudget then guarantees the serialized file is at most MAX_FILE_BYTES.
+//
+// The same commit also folds the day into the town state (<stateDir>/<saveId>/_town.json,
+// see town.ts): new facts, then the night's gossip.
 
 import { mkdir, readFile, rename, rm, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import type { DayEndRequest, DayEvent, DayRef, Season } from "./protocol.ts";
 import { SEASONS } from "./protocol.ts";
+import { seededRng, seedFrom } from "./rng.ts";
+import { applyNight, emptyTown, type TownState } from "./town.ts";
 
 export const MAX_ENTRIES = 14;
 export const MAX_ENTRY_TEXT = 1200;
@@ -224,6 +229,21 @@ export class MemoryStore {
     return join(this.dir, saveId, "_pending.json");
   }
 
+  private townPath(saveId: string): string {
+    return join(this.dir, saveId, "_town.json");
+  }
+
+  async loadTown(saveId: string): Promise<TownState> {
+    const raw = (await this.readJson(this.townPath(saveId))) as TownState | null;
+    if (raw === null) return emptyTown();
+    if (raw.version !== 1) throw new Error(`town file for ${saveId} has unknown version ${String((raw as { version: unknown }).version)}`);
+    return raw;
+  }
+
+  async saveTown(saveId: string, town: TownState): Promise<void> {
+    await this.writeJson(saveId, this.townPath(saveId), town);
+  }
+
   private serial<T>(saveId: string, fn: () => Promise<T>): Promise<T> {
     const run = (this.queues.get(saveId) ?? Promise.resolve()).then(fn);
     this.queues.set(saveId, run.catch(() => {}));
@@ -287,6 +307,9 @@ export class MemoryStore {
       for (const [npc, list] of share) {
         await this.save(saveId, applyDay(await this.load(saveId, npc), p.day, list, p.playerName));
       }
+      // The night's dice are seeded by save and date, so replaying a save replays its gossip.
+      const rng = seededRng(seedFrom(`${saveId}:${dayKey(p.day)}`));
+      await this.saveTown(saveId, applyNight(await this.loadTown(saveId), p, rng));
       await rm(this.pendingPath(saveId));
       return { outcome: "committed", committed: [...share.keys()] };
     });

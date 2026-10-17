@@ -15,6 +15,15 @@ public sealed record FriendshipInfo(int Hearts, int Points);
 public sealed record TranscriptLine(string Speaker, string Text);
 public sealed record Choice(string Id, string Text);
 
+/// <summary>Every stat the bridge can read. The brain decides which ones each NPC may know.</summary>
+public sealed record GameStats(
+    string? FarmName,
+    int? DaysPlayed,
+    int? CommunityCenterRooms,
+    int? DeepestMineLevel,
+    List<string>? FarmBuildings,
+    int? Money);
+
 public sealed record TalkRequest(
     string SaveId,
     string Npc,
@@ -22,7 +31,8 @@ public sealed record TalkRequest(
     GameDay Day,
     FriendshipInfo Friendship,
     Choice? RecentChoice,
-    List<TranscriptLine> Transcript)
+    List<TranscriptLine> Transcript,
+    GameStats Stats)
 {
     public int V { get; init; } = BrainClient.ProtocolVersion;
 }
@@ -41,7 +51,10 @@ public sealed record DayEvent(
     string? Item = null,
     string? Taste = null);
 
-public sealed record DayEndRequest(string SaveId, string PlayerName, GameDay Day, List<DayEvent> Events)
+/// <summary>NPCs seen on the same map at the same time today. Gossip passes between them overnight.</summary>
+public sealed record Together(string Location, List<string> Npcs);
+
+public sealed record DayEndRequest(string SaveId, string PlayerName, GameDay Day, List<DayEvent> Events, List<Together> Together)
 {
     public int V { get; init; } = BrainClient.ProtocolVersion;
 }
