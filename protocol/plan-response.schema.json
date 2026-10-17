@@ -1,0 +1,144 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/mimir-agent/townsfolk/protocol/plan-response.schema.json",
+  "title": "POST /v1/plan response (200)",
+  "description": "Tomorrow's validated town plan. Every part here passed the brain's validator against the world snapshot. Parts that failed are listed in `dropped` with a reason and run vanilla. A cast NPC with no schedule here runs its vanilla schedule.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["v", "day", "source", "schedules", "goals", "happening", "quest", "friendship", "relationships", "dropped"],
+  "properties": {
+    "v": { "$ref": "common.schema.json#/$defs/v" },
+    "day": { "$ref": "common.schema.json#/$defs/dayRef" },
+    "source": {
+      "enum": ["model", "fallback", "festival"],
+      "description": "fallback: the model gave nothing usable in two attempts, everything is vanilla. festival: festival days are never planned."
+    },
+    "schedules": {
+      "type": "array",
+      "maxItems": 8,
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["npc", "stops"],
+        "properties": {
+          "npc": { "$ref": "#/$defs/cast" },
+          "stops": { "type": "array", "minItems": 1, "maxItems": 12, "items": { "$ref": "#/$defs/stop" } }
+        }
+      }
+    },
+    "goals": {
+      "type": "array",
+      "maxItems": 8,
+      "description": "Each cast member's goal after tonight. Informational for the bridge; slice 4 puts it into talk.",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["npc", "text", "progress", "isNew"],
+        "properties": {
+          "npc": { "$ref": "#/$defs/cast" },
+          "text": { "type": "string", "minLength": 1, "maxLength": 120 },
+          "progress": { "type": "integer", "minimum": 0, "maximum": 100 },
+          "isNew": { "type": "boolean" }
+        }
+      }
+    },
+    "happening": {
+      "oneOf": [
+        { "type": "null" },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["location", "start", "end", "participants", "topic"],
+          "properties": {
+            "location": { "$ref": "#/$defs/location" },
+            "start": { "$ref": "#/$defs/time" },
+            "end": { "$ref": "#/$defs/time" },
+            "participants": { "type": "array", "minItems": 2, "maxItems": 8, "uniqueItems": true, "items": { "$ref": "#/$defs/cast" } },
+            "topic": { "type": "string", "minLength": 1, "maxLength": 120 }
+          }
+        }
+      ]
+    },
+    "quest": {
+      "oneOf": [
+        { "type": "null" },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["id", "item", "from", "reward", "text"],
+          "description": "One item-delivery quest, sent by mail.",
+          "properties": {
+            "id": { "type": "string", "pattern": "^townsfolk_[0-9]+$" },
+            "item": { "type": "string", "minLength": 1, "maxLength": 60 },
+            "from": { "$ref": "#/$defs/cast" },
+            "reward": { "type": "integer", "minimum": 0, "maximum": 500 },
+            "text": { "type": "string", "minLength": 1, "maxLength": 400 }
+          }
+        }
+      ]
+    },
+    "friendship": {
+      "type": "array",
+      "maxItems": 8,
+      "description": "Friendship point changes toward the player.",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["npc", "delta", "reason"],
+        "properties": {
+          "npc": { "$ref": "#/$defs/cast" },
+          "delta": { "type": "integer", "minimum": -40, "maximum": 40, "not": { "const": 0 } },
+          "reason": { "$ref": "#/$defs/reason" }
+        }
+      }
+    },
+    "relationships": {
+      "type": "array",
+      "maxItems": 28,
+      "description": "NPC-to-NPC changes. The brain applies them to its own town state when this day is saved; the bridge has nothing to do with them.",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["a", "b", "delta", "reason"],
+        "properties": {
+          "a": { "$ref": "#/$defs/cast" },
+          "b": { "$ref": "#/$defs/cast" },
+          "delta": { "type": "integer", "minimum": -10, "maximum": 10, "not": { "const": 0 } },
+          "reason": { "$ref": "#/$defs/reason" }
+        }
+      }
+    },
+    "dropped": {
+      "type": "array",
+      "description": "Every plan part the validator dropped, with why. Also written to the brain log.",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["part", "reason"],
+        "properties": {
+          "part": { "type": "string", "minLength": 1 },
+          "reason": { "type": "string", "minLength": 1 }
+        }
+      }
+    }
+  },
+  "$defs": {
+    "cast": { "enum": ["Abigail", "Emily", "Gus", "Haley", "Lewis", "Pierre", "Robin", "Shane"] },
+    "location": { "type": "string", "pattern": "^[A-Za-z0-9_.-]{1,80}$" },
+    "time": { "type": "integer", "minimum": 610, "maximum": 2600 },
+    "reason": { "type": "string", "minLength": 1, "maxLength": 200 },
+    "stop": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["time", "location", "x", "y", "facing"],
+      "description": "Sets off at `time` for tile (x, y) of `location`, facing 0 up, 1 right, 2 down, 3 left on arrival. Times strictly increase within a schedule.",
+      "properties": {
+        "time": { "$ref": "#/$defs/time" },
+        "location": { "$ref": "#/$defs/location" },
+        "x": { "type": "integer", "minimum": 0 },
+        "y": { "type": "integer", "minimum": 0 },
+        "facing": { "type": "integer", "minimum": 0, "maximum": 3 }
+      }
+    }
+  }
+}

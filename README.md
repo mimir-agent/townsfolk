@@ -57,6 +57,10 @@ What to expect when something is off:
 
 Brain settings are environment variables, listed at the top of `brain/src/main.ts`. `TOWNSFOLK_MODEL=fake` runs with canned lines and no model at all; `TOWNSFOLK_MODEL=anthropic` uses `ANTHROPIC_API_KEY` (for players; not tried yet).
 
+## Overnight planner (brain only so far)
+
+`POST /v1/plan` writes tomorrow for the cast of 8 (Abigail, Emily, Gus, Haley, Lewis, Pierre, Robin, Shane): a schedule and a goal per NPC, at most one happening, at most one mailed item quest, and friendship and NPC relationship shifts. The brain checks every part against the world snapshot from `POST /v1/world` and drops what fails, one part at a time, with a reason in the log. A schedule that repeats one of the NPC's last 7 gets one regen, then that NPC runs vanilla. Plan history is kept in `_plans.json` next to the memory files. The mod does not call these endpoints yet (slice 6), so nothing changes in game.
+
 ## Development
 
 ```sh

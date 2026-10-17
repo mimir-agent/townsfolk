@@ -4,8 +4,11 @@ import { spawn } from "node:child_process";
 
 export type ModelAdapter = {
   name: string;
-  complete(system: string, user: string, signal: AbortSignal): Promise<string>;
+  // maxTokens bounds the reply where the adapter can (the anthropic API); the CLI has no flag for it.
+  complete(system: string, user: string, signal: AbortSignal, maxTokens?: number): Promise<string>;
 };
+
+export const TALK_MAX_TOKENS = 600;
 
 // Spawns the official Claude Code CLI. It uses its own login; this code never sees a token.
 // No tools, no settings, no session files: one prompt in, one JSON envelope out.
@@ -55,7 +58,7 @@ export function claudeCliAdapter(opts: { bin: string; model: string }): ModelAda
 export function anthropicAdapter(opts: { apiKey: string; model: string }): ModelAdapter {
   return {
     name: "anthropic",
-    async complete(system, user, signal) {
+    async complete(system, user, signal, maxTokens = TALK_MAX_TOKENS) {
       const res = await fetch("https://api.anthropic.com/v1/messages", {
         method: "POST",
         signal,
@@ -66,7 +69,7 @@ export function anthropicAdapter(opts: { apiKey: string; model: string }): Model
         },
         body: JSON.stringify({
           model: opts.model,
-          max_tokens: 600,
+          max_tokens: maxTokens,
           system,
           messages: [{ role: "user", content: user }],
         }),

@@ -41,6 +41,8 @@ const ROUTES: Record<string, [string | null, string]> = {
   "/v1/talk": ["talk-request", "talk-response"],
   "/v1/day-end": ["day-end-request", "day-end-response"],
   "/v1/saved": ["saved-request", "saved-response"],
+  "/v1/world": ["world-request", "world-response"],
+  "/v1/plan": ["plan-request", "plan-response"],
 };
 
 export const day: GameDay = { season: "spring", day: 5, year: 1, time: 1130, weather: "sunny", location: "Town" };
@@ -63,9 +65,9 @@ export type Client = {
   get(path: string): Promise<{ status: number; json: any }>;
 };
 
-export async function withServer(model: ModelAdapter, fn: (c: Client) => Promise<void>): Promise<void> {
+export async function withServer(model: ModelAdapter, fn: (c: Client) => Promise<void>, log: (msg: string) => void = () => {}): Promise<void> {
   const store = await tempStore();
-  const server = createBrain({ store, model, talkDeadlineMs: 5000, log: () => {} });
+  const server = createBrain({ store, model, talkDeadlineMs: 5000, planDeadlineMs: 5000, log });
   await new Promise<void>((r) => server.listen(0, "127.0.0.1", r));
   const { port } = server.address() as AddressInfo;
   const url = `http://127.0.0.1:${port}`;
