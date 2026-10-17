@@ -29,4 +29,4 @@ The full diary is `diary-claude-cli-14d.md` next to this file.
 
 This is evidence that the real model stays valid and does not repeat schedules over two weeks. It is not proof that it stays fresh for a year: 14 days is one run, one seed, one model.
 
-One thing it does show that needs attention: happenings repeat in theme. Of the 5 happenings that survived validation, 4 were Egg Festival preparation with Lewis and Robin. Schedules vary, but the happening prompt pulls toward the next festival. Worth a look before a long real run (a season), for example by putting recent happenings more strongly in the digest. Not changed in this slice.
+One thing it does show that needs attention: happenings repeat in theme. All 4 happenings that survived validation were Egg Festival preparation, and all 4 had Lewis and Robin in them. Schedules vary, but the happening prompt pulls toward the next festival. Worth a look before a long real run (a season), for example by putting recent happenings more strongly in the digest. Not changed in this slice.
