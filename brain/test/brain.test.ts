@@ -7,13 +7,13 @@ import { emptyTown } from "../src/town.ts";
 import { DEFAULT_FAKE_REPLY, fakeAdapter } from "../src/model.ts";
 import type { DayEndRequest } from "../src/protocol.ts";
 import { parseTalk } from "../src/protocol.ts";
-import { MAX_TURNS, talk, validateReply } from "../src/talk.ts";
+import { MAX_TURNS, NO_CONTEXT, talk, validateReply } from "../src/talk.ts";
 import { assertValid, day, talkReq as req, tempStore, withServer } from "./helpers.ts";
 
 const quiet = { deadlineMs: 5000, log: () => {} };
 
 test("valid model reply passes through with 3 choices", async () => {
-  const r = await talk(req(), emptyMemory("Abigail"), emptyTown(), fakeAdapter([DEFAULT_FAKE_REPLY]), quiet);
+  const r = await talk(req(), emptyMemory("Abigail"), emptyTown(), NO_CONTEXT, fakeAdapter([DEFAULT_FAKE_REPLY]), quiet);
   assertValid("talk-response", r);
   assert.equal(r.source, "model");
   assert.equal(r.choices.length, 3);
@@ -23,14 +23,14 @@ test("valid model reply passes through with 3 choices", async () => {
 
 test("invalid reply is retried once, then the valid one is used", async () => {
   const model = fakeAdapter(["not json at all", DEFAULT_FAKE_REPLY]);
-  const r = await talk(req(), emptyMemory("Abigail"), emptyTown(), model, quiet);
+  const r = await talk(req(), emptyMemory("Abigail"), emptyTown(), NO_CONTEXT, model, quiet);
   assert.equal(model.calls.length, 2);
   assert.equal(r.source, "model");
 });
 
 test("two failures fall back to a canned line that ends the conversation", async () => {
   const model = fakeAdapter(["THROW", '{"line":"hi","choices":[]}']);
-  const r = await talk(req(), emptyMemory("Abigail"), emptyTown(), model, quiet);
+  const r = await talk(req(), emptyMemory("Abigail"), emptyTown(), NO_CONTEXT, model, quiet);
   assertValid("talk-response", r);
   assert.equal(model.calls.length, 2);
   assert.equal(r.source, "fallback");
@@ -60,7 +60,7 @@ test("the turn limit forces end=true and no choices", async () => {
   const model = fakeAdapter([DEFAULT_FAKE_REPLY]);
   const talkRequest = req({ transcript, recentChoice: { id: "a", text: "p3" } });
   assertValid("talk-request", talkRequest);
-  const r = await talk(talkRequest, emptyMemory("Abigail"), emptyTown(), model, quiet);
+  const r = await talk(talkRequest, emptyMemory("Abigail"), emptyTown(), NO_CONTEXT, model, quiet);
   assert.equal(MAX_TURNS, 3);
   assert.equal(r.end, true);
   assert.deepEqual(r.choices, []);
@@ -81,7 +81,7 @@ test("prompt carries only this NPC's own memory", async () => {
   );
   await store.commit("Farm_123", day);
   const model = fakeAdapter([DEFAULT_FAKE_REPLY]);
-  await talk(req({ npc: "Pierre" }), await store.load("Farm_123", "Pierre"), emptyTown(), model, quiet);
+  await talk(req({ npc: "Pierre" }), await store.load("Farm_123", "Pierre"), emptyTown(), NO_CONTEXT, model, quiet);
   const prompt = model.calls[0]!.user;
   assert.match(prompt, /Pierre secret line/);
   assert.doesNotMatch(prompt, /Abby/);

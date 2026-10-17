@@ -5,7 +5,7 @@ import { createServer, type IncomingMessage, type Server, type ServerResponse } 
 import { CAST } from "./cast.ts";
 import { dateLabel, type MemoryStore, type NpcMemory } from "./memory.ts";
 import type { ModelAdapter } from "./model.ts";
-import { memoriesTonight, plan } from "./plan.ts";
+import { memoriesTonight, plan, todayFor } from "./plan.ts";
 import {
   BadRequest,
   NotReady,
@@ -68,8 +68,9 @@ export function createBrain(deps: BrainDeps): Server {
         const body = parseTalk(await readJson(req));
         const mem = await deps.store.load(body.saveId, body.npc);
         const town = await deps.store.loadTown(body.saveId);
-        const reply = await talk(body, mem, town, deps.model, { deadlineMs: deps.talkDeadlineMs, log: deps.log });
-        deps.log(`talk ${body.npc} ${reply.source} ${Date.now() - started}ms end=${reply.end}`);
+        const ctx = todayFor(await deps.store.loadPlans(body.saveId), body.npc, body.day);
+        const reply = await talk(body, mem, town, ctx, deps.model, { deadlineMs: deps.talkDeadlineMs, log: deps.log });
+        deps.log(`talk ${body.npc} ${reply.source} ${Date.now() - started}ms end=${reply.end} join=${reply.happening ? "offered" : "no"}`);
         return send(res, 200, reply);
       }
       if (req.method === "POST" && req.url === "/v1/day-end") {

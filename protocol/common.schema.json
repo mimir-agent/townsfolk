@@ -31,6 +31,16 @@
         "location": { "type": "string", "minLength": 1, "maxLength": 80 }
       }
     },
+    "talkFact": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["text", "shareable"],
+      "description": "Something the NPC will remember from a picked reply, for example a promise. It reaches that NPC's memory and the town facts only when the day is saved. shareable false means told in confidence: never passed on as gossip.",
+      "properties": {
+        "text": { "type": "string", "minLength": 1, "maxLength": 200 },
+        "shareable": { "type": "boolean" }
+      }
+    },
     "choice": {
       "type": "object",
       "required": ["id", "text"],

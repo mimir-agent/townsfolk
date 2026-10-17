@@ -104,9 +104,9 @@ export function fakeAdapter(replies: string[]): ModelAdapter & { calls: { system
 export const DEFAULT_FAKE_REPLY = JSON.stringify({
   line: "Oh, hello there. Nice day for it, isn't it?",
   choices: [
-    { id: "a", text: "It really is." },
-    { id: "b", text: "Could be better." },
-    { id: "c", text: "What are you up to?" },
+    { id: "a", text: "It really is.", delta: 2 },
+    { id: "b", text: "Could be better.", delta: -1 },
+    { id: "c", text: "What are you up to?", delta: 1 },
   ],
   end: false,
 });

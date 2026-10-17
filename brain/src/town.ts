@@ -75,15 +75,23 @@ export function newFact(id: string, created: DayRef, text: string, shareable: bo
   return { id, created, shareable, knowers: k };
 }
 
-// A gift is a public act: the receiver and everyone who saw it know, and may pass it on.
-// Talks make no facts here; what was said already lives in each NPC's memory.
+// Facts a committed day creates, in event order, at most MAX_NEW_FACTS_PER_DAY:
+//   gift  a public act: the receiver and everyone who saw it know, and may pass it on
+//   join  the player joined a happening: every participant saw it, and may pass it on
+//   talk  only when the picked reply carried a fact (a promise): the NPC spoken to was told it;
+//         witnesses saw a conversation but did not hear it. In confidence means not shareable.
+// Other talk makes no fact; what was said already lives in that NPC's memory.
 export function factsFromDay(day: PendingDay): Fact[] {
   const facts: Fact[] = [];
+  const add = (text: string, shareable: boolean, knowers: Record<string, FactSource>) => {
+    if (facts.length < MAX_NEW_FACTS_PER_DAY) facts.push(newFact(`${dayKey(day.day)}-${facts.length}`, day.day, text, shareable, knowers));
+  };
+  const sawIt = (npc: string, witnesses: string[]): Record<string, FactSource> =>
+    Object.fromEntries([npc, ...witnesses].map((n): [string, FactSource] => [n, { kind: "saw" }]));
   for (const e of day.events) {
-    if (e.type !== "gift" || facts.length >= MAX_NEW_FACTS_PER_DAY) continue;
-    const knowers: Record<string, FactSource> = { [e.npc]: { kind: "saw" } };
-    for (const w of e.witnesses) knowers[w] = { kind: "saw" };
-    facts.push(newFact(`${dayKey(day.day)}-${facts.length}`, day.day, `${day.playerName} gave ${e.npc} ${e.item} at ${e.location}.`, true, knowers));
+    if (e.type === "gift") add(`${day.playerName} gave ${e.npc} ${e.item} at ${e.location}.`, true, sawIt(e.npc, e.witnesses));
+    else if (e.type === "join") add(`${day.playerName} joined in at ${e.location}: ${e.topic}.`, true, sawIt(e.npc, e.witnesses));
+    else if (e.fact !== undefined) add(e.fact.text, e.fact.shareable, { [e.npc]: { kind: "told" } });
   }
   return facts;
 }
