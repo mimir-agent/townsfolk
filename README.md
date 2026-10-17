@@ -61,6 +61,10 @@ Brain settings are environment variables, listed at the top of `brain/src/main.t
 
 `POST /v1/plan` writes tomorrow for the cast of 8 (Abigail, Emily, Gus, Haley, Lewis, Pierre, Robin, Shane): a schedule and a goal per NPC, at most one happening, at most one mailed item quest, and friendship and NPC relationship shifts. The brain checks every part against the world snapshot from `POST /v1/world` and drops what fails, one part at a time, with a reason in the log. A schedule that repeats one of the NPC's last 7 gets one regen, then that NPC runs vanilla. Plan history is kept in `_plans.json` next to the memory files. The mod does not call these endpoints yet (slice 6), so nothing changes in game.
 
+## Conversations with consequences
+
+Each reply the player can pick moves that NPC's friendship a little (at most 15 points a pick, at most 40 points a day from talk), and some replies leave something the NPC remembers, such as a promise. Promises reach that NPC's memory, its prompts and tomorrow's plan, and can travel as gossip unless they were said in confidence. Talk prompts also carry the NPC's own goal and today's happening if they are in it. Talking to someone at a happening, during it, offers one "join in" reply: picking it gives everyone there a small friendship gain and they all remember the player joined. The happening comes from the night's plan, which the mod does not request yet (slice 6), so in game the join choice does not appear until then; the friendship deltas and remembered facts work now.
+
 ## Development
 
 ```sh
