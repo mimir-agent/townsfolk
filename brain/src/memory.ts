@@ -69,7 +69,7 @@ export function dateLabel(d: DayRef): string {
   return `${d.season} ${d.day}, year ${d.year}`;
 }
 
-function clock(time: number): string {
+export function clock(time: number): string {
   const h = Math.floor(time / 100);
   const m = time % 100;
   const h12 = ((h + 11) % 12) + 1;
