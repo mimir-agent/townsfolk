@@ -1,0 +1,19 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <AssemblyName>Townsfolk</AssemblyName>
+    <RootNamespace>Townsfolk</RootNamespace>
+    <Version>0.1.0</Version>
+    <TargetFramework>net6.0</TargetFramework>
+    <Nullable>enable</Nullable>
+    <LangVersion>latest</LangVersion>
+    <!-- Where Stardew Valley.dll lives on the mini. Override with -p:GamePath=... elsewhere. -->
+    <GamePath Condition="'$(GamePath)' == ''">/Users/mir/Library/Application Support/Steam/steamapps/common/Stardew Valley/Contents/MacOS</GamePath>
+    <ModFolderName>Townsfolk</ModFolderName>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <PackageReference Include="Pathoschild.Stardew.ModBuildConfig" Version="4.4.0" />
+  </ItemGroup>
+
+</Project>
