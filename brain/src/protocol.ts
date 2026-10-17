@@ -70,10 +70,54 @@ export type DayEndResponse = { v: 1; ok: true; pending: string[] };
 export type SavedRequest = { v: 1; saveId: string; day: DayRef };
 export type SavedResponse = { v: 1; ok: true; outcome: "committed" | "nothing-pending" | "stale-discarded"; committed: string[] };
 
+// The world as the bridge sees it at save load. The planner's validator checks every plan part
+// against it; the bridge later re-checks only what needs the live game (is the tile passable).
+export type WorldLocation = { name: string; width: number; height: number };
+export type WorldItem = { id: string; name: string };
+export type CalendarDay = { season: Season; day: number };
+export type WorldRequest = {
+  v: 1;
+  saveId: string;
+  locations: WorldLocation[];
+  items: WorldItem[];
+  festivals: CalendarDay[];
+  married: string[];
+};
+export type WorldResponse = { v: 1; ok: true };
+
+// day is the date being planned (tomorrow, seen from the night before).
+export type PlanRequest = { v: 1; saveId: string; playerName: string; day: DayRef; stats: GameStats };
+
+export type ScheduleStop = { time: number; location: string; x: number; y: number; facing: number };
+export type PlannedSchedule = { npc: string; stops: ScheduleStop[] };
+export type GoalView = { npc: string; text: string; progress: number; isNew: boolean };
+export type Happening = { location: string; start: number; end: number; participants: string[]; topic: string };
+export type MailQuest = { id: string; item: string; from: string; reward: number; text: string };
+export type FriendshipShift = { npc: string; delta: number; reason: string };
+export type RelationshipShift = { a: string; b: string; delta: number; reason: string };
+export type DroppedPart = { part: string; reason: string };
+
+export type PlanResponse = {
+  v: 1;
+  day: DayRef;
+  // model: planned by the model (some parts may be dropped). fallback: the model gave nothing
+  // usable twice, so the whole town runs vanilla. festival: festival days are never planned.
+  source: "model" | "fallback" | "festival";
+  schedules: PlannedSchedule[];
+  goals: GoalView[];
+  happening: Happening | null;
+  quest: MailQuest | null;
+  friendship: FriendshipShift[];
+  relationships: RelationshipShift[];
+  dropped: DroppedPart[];
+};
+
 export type HealthResponse = { v: 1; ok: true; model: string };
 export type ErrorResponse = { v: 1; error: string };
 
 export class BadRequest extends Error {}
+// The request is well formed but the brain lacks state it needs first (HTTP 409).
+export class NotReady extends Error {}
 
 // Names become file names, so the allowed alphabet is closed: letters, digits, space, dot,
 // apostrophe, underscore, hyphen. A leading dot is refused so "." and ".." cannot appear.
@@ -81,6 +125,12 @@ const NAME = /^[\p{L}\p{N}][\p{L}\p{N} ._'-]{0,59}$/u;
 const MAX_WITNESSES = 40;
 const MAX_TOGETHER = 200;
 const MAX_BUILDINGS = 100;
+const MAX_LOCATIONS = 200;
+// The bridge sends the items the planner may use in quests, not every item in the game.
+const MAX_ITEMS = 300;
+const MAX_FESTIVALS = 40;
+// Location names end up in game schedule strings, which split on spaces and slashes.
+export const LOCATION_NAME = /^[A-Za-z0-9_.-]{1,80}$/;
 
 function obj(v: unknown, where: string): Record<string, unknown> {
   if (typeof v !== "object" || v === null || Array.isArray(v)) throw new BadRequest(`${where} must be an object`);
@@ -230,4 +280,36 @@ export function parseDayEnd(v: unknown): DayEndRequest {
 export function parseSaved(v: unknown): SavedRequest {
   const b = body(v);
   return { v: 1, saveId: name(b.saveId, "saveId"), day: parseDayRef(b.day, "day") };
+}
+
+function list(v: unknown, where: string, max: number): unknown[] {
+  if (!Array.isArray(v) || v.length > max) throw new BadRequest(`${where} must be an array of at most ${max}`);
+  return v;
+}
+
+export function parseWorld(v: unknown): WorldRequest {
+  const b = body(v);
+  const locations = list(b.locations, "locations", MAX_LOCATIONS).map((l, i): WorldLocation => {
+    const o = obj(l, `locations[${i}]`);
+    const n = str(o.name, `locations[${i}].name`, 80);
+    if (!LOCATION_NAME.test(n)) throw new BadRequest(`locations[${i}].name has characters outside A-Z a-z 0-9 _ . -`);
+    return { name: n, width: int(o.width, `locations[${i}].width`, 1, 1000), height: int(o.height, `locations[${i}].height`, 1, 1000) };
+  });
+  if (new Set(locations.map((l) => l.name)).size !== locations.length) throw new BadRequest("locations has duplicate names");
+  const items = list(b.items, "items", MAX_ITEMS).map((it, i): WorldItem => {
+    const o = obj(it, `items[${i}]`);
+    return { id: str(o.id, `items[${i}].id`, 60), name: str(o.name, `items[${i}].name`, 80) };
+  });
+  const festivals = list(b.festivals, "festivals", MAX_FESTIVALS).map((f, i): CalendarDay => {
+    const o = obj(f, `festivals[${i}]`);
+    if (!SEASONS.includes(o.season as Season)) throw new BadRequest(`festivals[${i}].season must be one of ${SEASONS.join(", ")}`);
+    return { season: o.season as Season, day: int(o.day, `festivals[${i}].day`, 1, 28) };
+  });
+  const married = list(b.married, "married", MAX_WITNESSES).map((n, i) => name(n, `married[${i}]`));
+  return { v: 1, saveId: name(b.saveId, "saveId"), locations, items, festivals, married };
+}
+
+export function parsePlan(v: unknown): PlanRequest {
+  const b = body(v);
+  return { v: 1, saveId: name(b.saveId, "saveId"), playerName: str(b.playerName, "playerName", 40), day: parseDayRef(b.day, "day"), stats: parseStats(b.stats) };
 }
