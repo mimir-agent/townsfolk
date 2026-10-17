@@ -1,0 +1,43 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/mimir-agent/townsfolk/protocol/common.schema.json",
+  "title": "Shared definitions for townsfolk protocol v1",
+  "$defs": {
+    "v": { "const": 1, "description": "Protocol major version. Any other value gets HTTP 400." },
+    "name": {
+      "type": "string",
+      "pattern": "^[\\p{L}\\p{N}][\\p{L}\\p{N} ._'-]{0,59}$",
+      "description": "Save ids and NPC names become file names, so the alphabet is closed and a leading dot is refused."
+    },
+    "season": { "enum": ["spring", "summer", "fall", "winter"] },
+    "dayRef": {
+      "type": "object",
+      "required": ["season", "day", "year"],
+      "properties": {
+        "season": { "$ref": "#/$defs/season" },
+        "day": { "type": "integer", "minimum": 1, "maximum": 28 },
+        "year": { "type": "integer", "minimum": 1 }
+      }
+    },
+    "gameDay": {
+      "type": "object",
+      "required": ["season", "day", "year", "time", "weather", "location"],
+      "properties": {
+        "season": { "$ref": "#/$defs/season" },
+        "day": { "type": "integer", "minimum": 1, "maximum": 28 },
+        "year": { "type": "integer", "minimum": 1 },
+        "time": { "type": "integer", "minimum": 600, "maximum": 2600 },
+        "weather": { "type": "string", "minLength": 1, "maxLength": 20 },
+        "location": { "type": "string", "minLength": 1, "maxLength": 80 }
+      }
+    },
+    "choice": {
+      "type": "object",
+      "required": ["id", "text"],
+      "properties": {
+        "id": { "type": "string", "minLength": 1, "maxLength": 20 },
+        "text": { "type": "string", "minLength": 1, "maxLength": 200 }
+      }
+    }
+  }
+}

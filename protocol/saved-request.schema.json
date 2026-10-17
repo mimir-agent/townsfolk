@@ -1,0 +1,13 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/mimir-agent/townsfolk/protocol/saved-request.schema.json",
+  "title": "POST /v1/saved request",
+  "description": "Sent after the game's Saved event, carrying the date of the day that was just ended and saved (the date sent in the last day-end).",
+  "type": "object",
+  "required": ["v", "saveId", "day"],
+  "properties": {
+    "v": { "$ref": "common.schema.json#/$defs/v" },
+    "saveId": { "$ref": "common.schema.json#/$defs/name" },
+    "day": { "$ref": "common.schema.json#/$defs/dayRef" }
+  }
+}

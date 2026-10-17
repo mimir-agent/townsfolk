@@ -1,0 +1,17 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/mimir-agent/townsfolk/protocol/saved-response.schema.json",
+  "title": "POST /v1/saved response (200)",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["v", "ok", "outcome", "committed"],
+  "properties": {
+    "v": { "$ref": "common.schema.json#/$defs/v" },
+    "ok": { "const": true },
+    "outcome": {
+      "enum": ["committed", "nothing-pending", "stale-discarded"],
+      "description": "stale-discarded: the pending day had a different date, so it was never saved and is thrown away."
+    },
+    "committed": { "type": "array", "uniqueItems": true, "items": { "$ref": "common.schema.json#/$defs/name" } }
+  }
+}
