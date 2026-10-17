@@ -48,7 +48,9 @@ What to expect when something is off:
 
 - Brain not running or slower than 8 seconds: the NPC says their normal game line. Nothing crashes.
 - Everyone else in town keeps their normal dialogue. To route every villager through the brain, set `"AllNpcs": true` in `Mods/Townsfolk/config.json` (created after the first launch) and restart the game.
-- Memory lives in `~/.local/state/townsfolk/<save folder>/<NPC>.json`, one file per NPC, holding only what that NPC saw. Delete a file to make them forget.
+- Memory lives in `~/.local/state/townsfolk/<save folder>/<NPC>.json`, one file per NPC, holding only what that NPC took part in or saw (other villagers in the same location witness a talk or a gift). Delete a file to make them forget.
+- A day is remembered only once the game has saved it. If you quit without saving and replay the day, only the replayed version is kept. Each file stays under 32 KB: the last 14 days in full, a summary per season, and one short summary for anything older.
+- The bridge and brain speak protocol v1 (schemas in `protocol/`). A brain on another version answers 400, and the game treats that as the brain being down.
 - Logs: the brain terminal prints one line per reply; the game side writes to `~/.config/StardewValley/ErrorLogs/SMAPI-latest.txt`.
 
 `config.json` settings: `BrainUrl` (default `http://127.0.0.1:7341`), `EnabledNpcs`, `AllNpcs`, `TimeoutSeconds` (default 8).
@@ -59,5 +61,5 @@ Brain settings are environment variables, listed at the top of `brain/src/main.t
 
 ```sh
 cd brain && npm test && npm run typecheck   # no network, no model: tests use a fake adapter
-cd mod && ~/.dotnet/dotnet build
+cd mod && ~/.dotnet/dotnet build -p:EnableModDeploy=false   # branch builds never touch the game's Mods folder
 ```
