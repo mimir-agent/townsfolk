@@ -77,7 +77,8 @@ test("canary, day 1: only Emily's talk prompt carries CANARY-123; after a seeded
       await c.post("/v1/talk", talkReq({ npc, day: spring2 }));
       prompts[npc] = model.calls[before]!.user;
     }
-    assert.match(prompts.Haley!, /CANARY-123.*\(heard from Emily, spring 1, year 1\)/);
+    // The talk prompt names whom a fact is about (slice E); the canary is about this farmer.
+    assert.match(prompts.Haley!, /CANARY-123.*\(heard from Emily, spring 1, year 1; about you\)/);
     for (const npc of CAST.filter((n) => n !== "Emily" && n !== "Haley")) {
       assert.doesNotMatch(prompts[npc]!, /CANARY-123/, `${npc} after night 1`);
     }
