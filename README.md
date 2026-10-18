@@ -136,5 +136,5 @@ With `--adapter claude-cli` the player's picks are still seeded, but the model's
 ```sh
 cd brain && npm test && npm run typecheck   # no network, no model: tests use a fake adapter
 cd mod && ~/.dotnet/dotnet build -p:EnableModDeploy=false   # branch builds never touch the game's Mods folder
-~/.dotnet/dotnet test mod.tests   # the bridge's pure rules (who answers a click); no game needed
+~/.dotnet/dotnet test tests/VanillaFirst.Tests   # who answers a click; no game needed
 ```

@@ -1,7 +1,7 @@
 <Project Sdk="Microsoft.NET.Sdk">
 
   <!-- Unit tests for the bridge's pure logic. Only files with no game types are linked in, so
-       this runs without Stardew Valley installed: ~/.dotnet/dotnet test mod.tests -->
+       this runs without Stardew Valley installed: ~/.dotnet/dotnet test tests/VanillaFirst.Tests -->
   <PropertyGroup>
     <TargetFramework>net8.0</TargetFramework>
     <Nullable>enable</Nullable>
@@ -10,7 +10,7 @@
   </PropertyGroup>
 
   <ItemGroup>
-    <Compile Include="../mod/VanillaFirst.cs" Link="VanillaFirst.cs" />
+    <Compile Include="../../mod/VanillaFirst.cs" Link="VanillaFirst.cs" />
   </ItemGroup>
 
   <ItemGroup>
