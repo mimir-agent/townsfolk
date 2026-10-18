@@ -3,6 +3,7 @@
 
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from "node:http";
 import { CAST } from "./cast.ts";
+import type { Readiness } from "./claude-check.ts";
 import { dateLabel, type MemoryStore, type NpcMemory } from "./memory.ts";
 import type { ModelAdapter } from "./model.ts";
 import { memoriesTonight, PLAN_SESSION, PLAN_SYSTEM, plan, todayFor } from "./plan.ts";
@@ -33,6 +34,10 @@ export type BrainDeps = {
   talkDeadlineMs: number;
   planDeadlineMs: number;
   log: (msg: string) => void;
+  // The release version (brain/package.json), reported by /v1/health for the mod's version check.
+  version: string;
+  // Whether talk can work at all (claude-check.ts), reported by /v1/health.
+  readiness: () => Readiness;
 };
 
 const MAX_BODY = 256 * 1024;
@@ -65,7 +70,8 @@ export function createBrain(deps: BrainDeps): Server {
     const started = Date.now();
     try {
       if (req.method === "GET" && req.url === "/v1/health") {
-        return send(res, 200, { v: 1, ok: true, model: deps.model.name });
+        const r = deps.readiness();
+        return send(res, 200, { v: 1, ok: true, model: deps.model.name, version: deps.version, ...(r.ready ? { ready: true } : { ready: false, reason: r.reason }) });
       }
       if (req.method === "POST" && req.url === "/v1/talk") {
         const body = parseTalk(await readJson(req));
@@ -74,7 +80,11 @@ export function createBrain(deps: BrainDeps): Server {
         const ctx = todayFor(await deps.store.loadPlans(body.saveId), body.npc, body.day);
         const hostKey = await deps.store.hostKey(body.saveId);
         const reply = await talk(body, mem, town, ctx, deps.model, { deadlineMs: deps.talkDeadlineMs, log: deps.log, hostKey });
-        deps.log(`talk ${body.npc} ${reply.source} ${Date.now() - started}ms end=${reply.end} join=${reply.happening ? "offered" : "no"}`);
+        deps.log(
+          reply.source === "fallback"
+            ? `talk ${body.npc} FAILED after ${Date.now() - started}ms, vanilla or canned line instead: ${reply.reason}`
+            : `talk ${body.npc} ${reply.source} ${Date.now() - started}ms end=${reply.end} join=${reply.happening ? "offered" : "no"}`,
+        );
         return send(res, 200, reply);
       }
       if (req.method === "POST" && req.url === "/v1/day-end") {

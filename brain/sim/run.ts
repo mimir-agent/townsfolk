@@ -158,6 +158,8 @@ export async function runSim(opts: SimOptions): Promise<SimResult> {
     model,
     talkDeadlineMs: opts.talkDeadlineMs,
     planDeadlineMs: opts.planDeadlineMs,
+    version: "sim",
+    readiness: () => ({ ready: true }),
     log: (m) => {
       brainLog.push(m);
       log(m);

@@ -53,6 +53,27 @@ public sealed class BrainLauncher : IDisposable
 
     private bool IsOurs => this.child is { HasExited: false };
 
+    /// <summary>True when the brain answering now is the one this launcher started.</summary>
+    public bool OwnsRunningBrain
+    {
+        get
+        {
+            lock (this.gate)
+                return this.IsOurs;
+        }
+    }
+
+    /// <summary>Stops the brain this launcher started and starts it again. Only for a brain it owns (OwnsRunningBrain).</summary>
+    public Task Restart()
+    {
+        this.Dispose();
+        lock (this.gate)
+        {
+            this.starting = Task.Run(this.Start);
+            return this.starting;
+        }
+    }
+
     private async Task Start()
     {
         try
@@ -165,7 +186,11 @@ public sealed class BrainLauncher : IDisposable
         try
         {
             if (p is { HasExited: false })
+            {
                 p.Kill(entireProcessTree: true);
+                // Restart starts a new brain on the same port right after this.
+                p.WaitForExit(3000);
+            }
         }
         catch (Exception ex)
         {

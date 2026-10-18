@@ -267,11 +267,16 @@ export function validateReply(raw: string, mustEnd: boolean, offer: HappeningVie
   return { line, choices: out, end: false, ...(offer ? { happening: offer } : {}) };
 }
 
-export function fallback(req: TalkRequest, mustEnd: boolean): TalkResponse {
+// Longest reason a fallback carries (protocol/talk-response.schema.json).
+export const REASON_MAX = 300;
+
+// reason: why no usable reply came, passed to the mod for its log. Never shown as dialogue.
+export function fallback(req: TalkRequest, mustEnd: boolean, reason: string): TalkResponse {
+  const why = reason.replace(/\s+/g, " ").trim().slice(0, REASON_MAX) || "no reason recorded";
   if (mustEnd || req.recentChoice) {
-    return { v: 1, line: "Ha, fair enough. Anyway, I should get going. See you around.", choices: [], end: true, source: "fallback" };
+    return { v: 1, line: "Ha, fair enough. Anyway, I should get going. See you around.", choices: [], end: true, source: "fallback", reason: why };
   }
-  return { v: 1, line: "Hm? Sorry, my mind was somewhere else. Good to see you.", choices: [], end: true, source: "fallback" };
+  return { v: 1, line: "Hm? Sorry, my mind was somewhere else. Good to see you.", choices: [], end: true, source: "fallback", reason: why };
 }
 
 // The way out. Every reply that is not the last one ends with this choice, written by the brain,
@@ -325,6 +330,7 @@ export async function talk(
   const { system, user } = buildPrompt(req, mem, town, ctx, mustEnd, offer, hostKey);
   const session = talkSession(req.saveId, farmerKey(req, hostKey));
   const deadline = Date.now() + opts.deadlineMs;
+  let reason = `no time left within the ${opts.deadlineMs}ms talk deadline`;
   for (let attempt = 1; attempt <= 2; attempt++) {
     const remaining = deadline - Date.now();
     if (remaining < 500) break;
@@ -335,8 +341,10 @@ export async function talk(
       opts.log(`talk ${req.npc} model answered in ${Date.now() - t0}ms`);
       return { v: 1, ...reply, choices: reply.end ? [] : withGoodbye(reply.choices, req, hostKey), source: "model" };
     } catch (err) {
+      const kind = err instanceof InvalidReply ? "model reply failed validation" : "model call failed";
+      reason = `${kind}: ${(err as Error).message}`;
       opts.log(`talk ${req.npc} attempt ${attempt} failed: ${(err as Error).message}`);
     }
   }
-  return fallback(req, mustEnd);
+  return fallback(req, mustEnd, reason);
 }

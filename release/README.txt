@@ -77,7 +77,9 @@ GOOD TO KNOW
 ------------
 
 - If the brain is not running, or Claude is slow (more than 25 seconds), people say their normal
-  game lines. Nothing breaks. The first meeting with someone, birthdays, quests and story
+  game lines. Nothing breaks. When a save loads, a red message at the bottom left says so if the
+  brain is not running, Claude Code is missing or not logged in, or an old brain from another
+  version is still running (close the window or Terminal tab you started it in, then reload). The first meeting with someone, birthdays, quests and story
   scenes always use the game's own dialogue.
 - Memory is kept on the host's computer, one file per person, in
     %LOCALAPPDATA%\townsfolk\<save name>\        (Windows)

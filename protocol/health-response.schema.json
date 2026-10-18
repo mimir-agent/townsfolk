@@ -4,10 +4,16 @@
   "title": "GET /v1/health response (200)",
   "type": "object",
   "additionalProperties": false,
-  "required": ["v", "ok", "model"],
+  "required": ["v", "ok", "model", "version", "ready"],
   "properties": {
     "v": { "$ref": "common.schema.json#/$defs/v" },
     "ok": { "const": true },
-    "model": { "type": "string", "minLength": 1 }
-  }
+    "model": { "type": "string", "minLength": 1 },
+    "version": { "type": "string", "minLength": 1, "maxLength": 40, "description": "The brain's release version (brain/package.json). At save load the mod warns when it differs from its own." },
+    "ready": { "type": "boolean", "description": "False when every talk will fall back: the claude command is missing or not logged in. reason says why." },
+    "reason": { "type": "string", "minLength": 1, "maxLength": 300, "description": "Present exactly when ready is false: a plain sentence for the player." }
+  },
+  "if": { "properties": { "ready": { "const": false } } },
+  "then": { "properties": { "reason": true }, "required": ["reason"] },
+  "else": { "properties": { "reason": false } }
 }

@@ -2,6 +2,16 @@
 
 One version number covers the whole release: `mod/manifest.json`, `mod/Townsfolk.csproj` and `brain/package.json` must match, and each release has a heading here. `npm run release` (in `brain/`) refuses to build otherwise. The release merge is tagged `vX.Y.Z`.
 
+## 0.1.2
+
+Every chat fell back to the game's own line within a fraction of a second on the host's Mac, and nothing said why. The fast ways a talk fails (Claude Code not found, not logged in, exiting with an error, a reply that is not JSON or breaks a rule) all end in a canned fallback within about 5 to 55 ms, so the waiting box opened and closed at once. This release makes each of them visible.
+
+- Each failed talk says why. The brain logs `talk <npc> FAILED after <ms>ms ...: <reason>` and returns the reason with the fallback (`reason` in `talk-response`). The SMAPI log shows `Brain gave no usable reply (reason: ...)` as a warning, with the brain's reason, or the timeout or request failure when no reply came.
+- Version check at load. `/v1/health` now returns `version` (from `brain/package.json`), `ready`, and `reason` when not ready. When a save loads, the mod compares the version with its own. If the brain the mod started itself is another version, it is restarted. If one started by hand is running (for example a 0.1.0 brain left open in a Terminal tab, which the 0.1.1 mod quietly used), the SMAPI log says `A brain from version X is already running on port 7341 ...; stop it and reload the save`.
+- Claude Code checked at brain start: `claude --version`, then `claude auth status --json`. If it is not found or not logged in, the brain still starts, prints a plain message in its window and log, and reports `ready: false` with the reason.
+- One message on screen per load when the brain is not running, is the wrong version, or cannot talk, so the player sees it without reading logs.
+- On Windows, a `claude` that is not on PATH no longer stops the brain from starting. It starts and reports why it cannot talk.
+
 ## 0.1.1
 
 Changes from the first play.

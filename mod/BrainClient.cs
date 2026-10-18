@@ -57,7 +57,14 @@ public sealed record TalkRequest(
     public int V { get; init; } = BrainClient.ProtocolVersion;
 }
 
-public sealed record TalkResponse(int V, string Line, List<TalkChoice> Choices, bool End, string Source, HappeningView? Happening = null);
+/// <summary>Reason: only on a fallback, why the brain had no usable reply. Logged, never shown as dialogue.</summary>
+public sealed record TalkResponse(int V, string Line, List<TalkChoice> Choices, bool End, string Source, HappeningView? Happening = null, string? Reason = null);
+
+/// <summary>
+/// GET /v1/health. Version: the brain's release version; Ready false: every talk will fall back,
+/// Reason says why. A brain older than 0.1.2 sends neither, so both are nullable here.
+/// </summary>
+public sealed record HealthResponse(int V, bool Ok, string Model, string? Version = null, bool? Ready = null, string? Reason = null);
 
 /// <summary>
 /// Npc took part. Witnesses are the other villagers in the same location at the time; for a
@@ -194,6 +201,28 @@ public sealed class BrainClient
     /// <summary>A reply the bridge can show. Also checks a reply relayed by the host, which a farmhand cannot trust blindly.</summary>
     public static bool IsUsable(TalkResponse res) =>
         res.V == ProtocolVersion && !string.IsNullOrWhiteSpace(res.Line) && res.Choices is not null && res.Choices.All(c => c is not null && c.Id is not null && c.Text is not null);
+
+    /// <summary>The brain's /v1/health answer, or null when it does not answer in protocol v1.</summary>
+    public async Task<HealthResponse?> Health()
+    {
+        try
+        {
+            using HttpResponseMessage res = await this.http.GetAsync("v1/health");
+            string body = await res.Content.ReadAsStringAsync();
+            if (!res.IsSuccessStatusCode)
+            {
+                this.log($"brain v1/health HTTP {(int)res.StatusCode}: {Truncate(body)}");
+                return null;
+            }
+            HealthResponse? h = JsonSerializer.Deserialize<HealthResponse>(body, Json);
+            return h is { V: ProtocolVersion, Ok: true } ? h : null;
+        }
+        catch (Exception ex)
+        {
+            this.log($"brain v1/health failed: {ex.GetType().Name}: {ex.Message}");
+            return null;
+        }
+    }
 
     public Task<bool> DayEnd(DayEndRequest req) => this.PostOk("v1/day-end", req);
 

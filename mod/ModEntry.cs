@@ -88,11 +88,47 @@ public sealed class ModEntry : Mod
             this.Reset();
             if (!OwnsSharedState)
                 return;
-            // The brain is started here when nothing answers; the world snapshot waits for it.
-            this.planner?.OnSaveLoaded(Context.IsOnHostComputer ? this.launcher?.EnsureRunning() ?? Task.CompletedTask : Task.CompletedTask);
+            // The brain is started here when nothing answers, then checked; the world snapshot waits for both.
+            this.planner?.OnSaveLoaded(Context.IsOnHostComputer ? Task.Run(this.CheckBrainAtLoad) : Task.CompletedTask);
             this.relay.OnSaveLoaded();
         };
         this.Monitor.Log($"Townsfolk: brain at {this.config.BrainUrl} (host computer only), NPCs: {(this.config.AllNpcs ? "all" : string.Join(", ", this.config.EnabledNpcs))}, planning {(this.config.Planning ? "on" : "off")}", LogLevel.Info);
+    }
+
+    // Thread pool, at save load on the host computer. Starts the brain if nothing answers, then
+    // asks /v1/health whether the brain is this mod's version and can talk. A brain of another
+    // version that the mod started itself (its bundled brain/package.json differs from the
+    // manifest) is restarted once; one started by hand is only reported, since the mod must not
+    // stop a process it did not start. Anything wrong is logged and shown once on the HUD.
+    private async Task CheckBrainAtLoad()
+    {
+        if (this.launcher is not null)
+            await this.launcher.EnsureRunning();
+        string mine = this.ModManifest.Version.ToString();
+        HealthResponse? health = await this.brain.Health();
+        if (health is not null && health.Version != mine && this.launcher is { OwnsRunningBrain: true })
+        {
+            this.Monitor.Log($"The brain this mod started reports version {health.Version ?? "none"}, not {mine}; restarting it.", LogLevel.Warn);
+            await this.launcher.Restart();
+            health = await this.brain.Health();
+        }
+        BrainNotice? notice = BrainCheck.AtLoad(health, mine, this.config.BrainUrl);
+        if (notice is null)
+        {
+            this.Monitor.Log($"Brain {health!.Version} is ready ({health.Model}).", LogLevel.Info);
+            return;
+        }
+        this.Monitor.Log(notice.Log, LogLevel.Warn);
+        Interlocked.Exchange(ref this.hudNotice, notice.Hud);
+    }
+
+    // Set on the thread pool by CheckBrainAtLoad, shown and cleared on the game thread.
+    private string? hudNotice;
+
+    private void ShowHudNotice()
+    {
+        if (Context.IsWorldReady && Interlocked.Exchange(ref this.hudNotice, null) is { } text)
+            Game1.addHUDMessage(new HUDMessage(text, HUDMessage.error_type));
     }
 
     // SMAPI calls this when the game quits: the brain the mod started goes with it.
@@ -316,6 +352,7 @@ public sealed class ModEntry : Mod
 
     private void OnUpdateTicked(object? sender, UpdateTickedEventArgs e)
     {
+        this.ShowHudNotice();
         this.relay.OnUpdateTicked();
         this.scenes.OnUpdateTicked();
         this.CheckGift();
@@ -371,13 +408,16 @@ public sealed class ModEntry : Mod
                 LogLevel.Warn);
 
         // Brain down, slow, or out of good answers on the opening turn: the NPC says their normal line.
-        if (c.Turns == 0 && (reply is null || reply.Source == "fallback"))
+        string? failure = BrainCheck.TalkFailure(reply, overdue, this.config.TimeoutSeconds, Context.IsOnHostComputer);
+        if (c.Turns == 0 && failure is not null)
         {
             s.Convo = null;
-            this.Monitor.Log($"Brain gave no usable reply; vanilla dialogue for {c.Npc.Name}.", LogLevel.Debug);
+            this.Monitor.Log($"Brain gave no usable reply (reason: {failure}); vanilla dialogue for {c.Npc.Name}.", LogLevel.Warn);
             c.Npc.checkAction(Game1.player, Game1.currentLocation);
             return;
         }
+        if (failure is not null)
+            this.Monitor.Log($"Brain gave no usable reply (reason: {failure}); {c.Npc.Name} ends the conversation.", LogLevel.Warn);
 
         // Mid-conversation failure with no reply at all: end politely so the player is never stuck.
         reply ??= new TalkResponse(BrainClient.ProtocolVersion, "Anyway, I should get going. See you around.", new List<TalkChoice>(), true, "fallback");

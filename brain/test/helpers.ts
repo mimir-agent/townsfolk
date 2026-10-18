@@ -8,6 +8,7 @@ import type { AddressInfo } from "node:net";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { Ajv2020, type ValidateFunction } from "ajv/dist/2020.js";
+import type { Readiness } from "../src/claude-check.ts";
 import { MemoryStore } from "../src/memory.ts";
 import type { ModelAdapter } from "../src/model.ts";
 import type { GameDay, TalkRequest } from "../src/protocol.ts";
@@ -65,9 +66,16 @@ export type Client = {
   get(path: string): Promise<{ status: number; json: any }>;
 };
 
-export async function withServer(model: ModelAdapter, fn: (c: Client) => Promise<void>, log: (msg: string) => void = () => {}): Promise<void> {
+export const TEST_VERSION = "0.0.0-test";
+
+export async function withServer(
+  model: ModelAdapter,
+  fn: (c: Client) => Promise<void>,
+  log: (msg: string) => void = () => {},
+  readiness: () => Readiness = () => ({ ready: true }),
+): Promise<void> {
   const store = await tempStore();
-  const server = createBrain({ store, model, talkDeadlineMs: 5000, planDeadlineMs: 5000, log });
+  const server = createBrain({ store, model, talkDeadlineMs: 5000, planDeadlineMs: 5000, log, version: TEST_VERSION, readiness });
   await new Promise<void>((r) => server.listen(0, "127.0.0.1", r));
   const { port } = server.address() as AddressInfo;
   const url = `http://127.0.0.1:${port}`;
