@@ -2,6 +2,7 @@ using System;
 using System.Collections.Generic;
 using System.Globalization;
 using System.Linq;
+using System.Threading.Tasks;
 
 namespace Townsfolk;
 
@@ -31,11 +32,13 @@ public static class RelayRules
 {
     /// <summary>
     /// A farmhand's event checked against protocol/day-end-request.schema.json, because the brain
-    /// refuses the whole day for one bad event. Null when it cannot be sent at all. Witnesses are
-    /// trimmed, not refused, as the host does for its own events. The farmer fields are left for
-    /// the host to overwrite with the sender's.
+    /// refuses the whole day for one bad event. Null when it cannot be sent at all. Every name
+    /// becomes a memory file on the host, so the NPC and each witness must be a villager in the
+    /// host's game (isVillager), and a talk or join NPC must also be voiced by the host's config
+    /// (isVoiced). Witnesses are trimmed, not refused, as the host does for its own events. The
+    /// farmer fields are left for the host to overwrite with the sender's.
     /// </summary>
-    public static DayEvent? Clean(DayEvent ev, Func<string, bool> isName, int maxWitnesses)
+    public static DayEvent? Clean(DayEvent ev, Func<string, bool> isVillager, Func<string, bool> isVoiced, int maxWitnesses)
     {
         bool known = ev.Type switch
         {
@@ -45,10 +48,12 @@ public static class RelayRules
             "chat" => ev.Reason is "first-meeting" or "quest" or "birthday" or "story",
             _ => false,
         };
-        if (!known || ev.Npc is null || !isName(ev.Npc) || !Fits(ev.Location, 80) || ev.Time < 600 || ev.Time > 2600)
+        if (!known || ev.Npc is null || !isVillager(ev.Npc) || !Fits(ev.Location, 80) || ev.Time < 600 || ev.Time > 2600)
+            return null;
+        if (ev.Type is "talk" or "join" && !isVoiced(ev.Npc))
             return null;
         List<string> witnesses = (ev.Witnesses ?? new List<string>())
-            .Where(w => w is not null && w != ev.Npc && isName(w))
+            .Where(w => w is not null && w != ev.Npc && isVillager(w))
             .Distinct()
             .Take(maxWitnesses)
             .ToList();
@@ -86,7 +91,59 @@ public static class RelayRules
             dropped);
     }
 
+    /// <summary>
+    /// Where a farmhand's relayed talk stands on the host's tick: still waiting on the brain,
+    /// answered (Reply is the brain's reply, or null when the call failed), or expired after
+    /// timeoutSeconds with no reply. An expired talk is answered null, so the farmhand runs
+    /// vanilla and its next talk is not refused as busy.
+    /// </summary>
+    public static (RelayedState State, TalkResponse? Reply) Settle(Task<TalkResponse?> reply, long askedAtMs, long nowMs, int timeoutSeconds)
+    {
+        if (reply.IsCompleted)
+            return (RelayedState.Answered, reply.Status == TaskStatus.RanToCompletion ? reply.Result : null);
+        return TalkWait.Overdue(askedAtMs, nowMs, timeoutSeconds) ? (RelayedState.Expired, null) : (RelayedState.Waiting, null);
+    }
+
     private static bool Fits(string? s, int max) => !string.IsNullOrEmpty(s) && s.Length <= max;
 
     private static bool OptFits(string? s, int max) => s is null || Fits(s, max);
+}
+
+public enum RelayedState { Waiting, Answered, Expired }
+
+public enum TalkAdmit { Accepted, TooSoon, Capped }
+
+/// <summary>
+/// How much relayed talk one farmhand may spend of the host's model budget: at most DailyCap
+/// accepted talks per game day, and none asked less than MinGapMs after that farmhand's last
+/// reply. A talk is counted when it is accepted, so a stuck brain call cannot give the count
+/// back. Kept across a disconnect, so leaving and rejoining does not reset the day.
+/// </summary>
+public sealed class TalkBudget
+{
+    public const int DailyCap = 150;
+    public const long MinGapMs = 1000;
+
+    private readonly Dictionary<long, int> talksToday = new();
+    private readonly Dictionary<long, long> lastReplyMs = new();
+
+    public TalkAdmit Admit(long farmerId, long nowMs)
+    {
+        this.talksToday.TryGetValue(farmerId, out int count);
+        if (count >= DailyCap)
+            return TalkAdmit.Capped;
+        if (this.lastReplyMs.TryGetValue(farmerId, out long last) && nowMs - last < MinGapMs)
+            return TalkAdmit.TooSoon;
+        this.talksToday[farmerId] = count + 1;
+        return TalkAdmit.Accepted;
+    }
+
+    /// <summary>The host replied to this farmhand at nowMs, with a line or with null.</summary>
+    public void Replied(long farmerId, long nowMs) => this.lastReplyMs[farmerId] = nowMs;
+
+    public void NewDay()
+    {
+        this.talksToday.Clear();
+        this.lastReplyMs.Clear();
+    }
 }

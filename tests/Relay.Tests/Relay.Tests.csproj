@@ -12,6 +12,7 @@
   <ItemGroup>
     <Compile Include="../../mod/RelayRules.cs" Link="RelayRules.cs" />
     <Compile Include="../../mod/BrainClient.cs" Link="BrainClient.cs" />
+    <Compile Include="../../mod/TalkWait.cs" Link="TalkWait.cs" />
   </ItemGroup>
 
   <ItemGroup>

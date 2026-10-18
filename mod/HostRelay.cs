@@ -55,6 +55,10 @@ public sealed class HostRelay
     private readonly HashSet<long> greeted = new();
     // A farmhand's talk waiting on the brain, at most one per farmhand.
     private readonly Dictionary<long, RelayedTalk> relayed = new();
+    // Relayed talks accepted per farmhand today and the gap since their last reply (Ward B1).
+    private readonly TalkBudget talkBudget = new();
+    // Farmhands already logged as past the daily talk cap today.
+    private readonly HashSet<long> cappedLogged = new();
     private readonly Dictionary<long, int> eventsToday = new();
 
     // ---- farmhand ----
@@ -91,6 +95,8 @@ public sealed class HostRelay
         this.inbox.Clear();
         this.greeted.Clear();
         this.relayed.Clear();
+        this.talkBudget.NewDay();
+        this.cappedLogged.Clear();
         this.eventsToday.Clear();
         this.link = Link.Off;
         this.helloId = null;
@@ -111,8 +117,13 @@ public sealed class HostRelay
         this.SendToHost(new HelloMessage(this.helloId, this.version), HelloType);
     }
 
-    /// <summary>Host: a new day, new per-farmhand event budgets.</summary>
-    public void OnDayEnding() => this.eventsToday.Clear();
+    /// <summary>Host: a new day, new per-farmhand event and talk budgets.</summary>
+    public void OnDayEnding()
+    {
+        this.eventsToday.Clear();
+        this.talkBudget.NewDay();
+        this.cappedLogged.Clear();
+    }
 
     public void OnUpdateTicked()
     {
@@ -243,6 +254,16 @@ public sealed class HostRelay
             this.Reply(from, msg.RequestId, null);
             return;
         }
+        // Counted here, on accept, so a brain call that never ends cannot give the count back.
+        long now = Environment.TickCount64;
+        TalkAdmit admit = this.talkBudget.Admit(from, now);
+        if (admit != TalkAdmit.Accepted)
+        {
+            if (admit == TalkAdmit.Capped && this.cappedLogged.Add(from))
+                this.monitor.Log($"{farmer.Name} reached {TalkBudget.DailyCap} relayed talks today; vanilla dialogue for them until tomorrow.", LogLevel.Info);
+            this.Reply(from, msg.RequestId, null);
+            return;
+        }
         // Who is talking, how close they are, what they have seen and the day all come from the
         // host's own copy of that farmer and game. The payload only supplies the NPC and the
         // conversation so far (transcript, picked reply, joined today).
@@ -257,15 +278,22 @@ public sealed class HostRelay
             FarmerId = ModEntry.FarmerId(farmer),
             FarmerName = ModEntry.FarmerName(farmer),
         };
-        this.relayed[from] = new RelayedTalk(msg.RequestId, this.brain.Talk(req));
+        this.relayed[from] = new RelayedTalk(msg.RequestId, this.brain.Talk(req), now);
     }
 
     private void AnswerRelayedTalk()
     {
-        foreach ((long to, RelayedTalk t) in this.relayed.Where(kv => kv.Value.Reply.IsCompleted).ToList())
+        long now = Environment.TickCount64;
+        foreach ((long to, RelayedTalk t) in this.relayed.ToList())
         {
+            (RelayedState state, TalkResponse? reply) = RelayRules.Settle(t.Reply, t.AskedAtMs, now, this.timeoutSeconds);
+            if (state == RelayedState.Waiting)
+                continue;
+            if (state == RelayedState.Expired)
+                this.monitor.Log($"The brain did not answer a relayed talk from player {to} within {this.timeoutSeconds} s; they get vanilla dialogue.", LogLevel.Warn);
             this.relayed.Remove(to);
-            this.Reply(to, t.RequestId, t.Reply.Status == TaskStatus.RanToCompletion ? t.Reply.Result : null);
+            this.talkBudget.Replied(to, now);
+            this.Reply(to, t.RequestId, reply);
         }
     }
 
@@ -277,14 +305,22 @@ public sealed class HostRelay
         this.eventsToday.TryGetValue(from, out int count);
         if (count >= MaxEventsPerFarmhand)
             return;
-        if (RelayRules.Clean(ev, ModEntry.ProtocolName.IsMatch, ModEntry.MaxWitnesses) is not { } clean)
+        // Each name becomes a memory file on the host, so only villagers in the host's own game
+        // pass (Ward B2): no made-up names, no Windows device names like NUL.
+        if (RelayRules.Clean(ev, IsVillager, this.IsVoiced, ModEntry.MaxWitnesses) is not { } clean)
         {
-            this.monitor.Log($"Dropped a {ev.Type} event from {farmer.Name}: outside the day-end protocol.", LogLevel.Debug);
+            this.monitor.Log($"Dropped a {ev.Type} event from {farmer.Name}: outside the day-end protocol or not a villager here.", LogLevel.Debug);
             return;
         }
         this.eventsToday[from] = count + 1;
         this.addEvent(clean with { FarmerId = ModEntry.FarmerId(farmer), FarmerName = ModEntry.FarmerName(farmer) });
     }
+
+    private static bool IsVillager(string name) =>
+        ModEntry.ProtocolName.IsMatch(name) && Game1.getCharacterFromName(name) is { IsVillager: true };
+
+    private bool IsVoiced(string name) =>
+        ModEntry.ProtocolName.IsMatch(name) && Game1.getCharacterFromName(name) is { } npc && this.isEnabled(npc);
 
     // ---- farmhand ----
 
@@ -352,7 +388,8 @@ public sealed class HostRelay
 
     private sealed record Incoming(long From, object Payload);
 
-    private sealed record RelayedTalk(string RequestId, Task<TalkResponse?> Reply);
+    // AskedAtMs is from Environment.TickCount64, the clock TalkWait expects.
+    private sealed record RelayedTalk(string RequestId, Task<TalkResponse?> Reply, long AskedAtMs);
 
     private sealed record PendingTalk(TaskCompletionSource<TalkResponse?> Reply, DateTime Deadline);
 }
