@@ -47,10 +47,11 @@
         "shareable": { "type": "boolean" }
       }
     },
+    "eventId": { "type": "string", "pattern": "^[A-Za-z0-9_.-]{1,60}$", "description": "One of the game's scripted event ids (Event.id)." },
     "eventsSeen": {
       "type": "array",
       "maxItems": 2000,
-      "items": { "type": "string", "pattern": "^[A-Za-z0-9_.-]{1,60}$" },
+      "items": { "$ref": "#/$defs/eventId" },
       "description": "Ids of the game's scripted events the player has seen (Game1.player.eventsSeen), sent unfiltered. The brain keeps, per NPC, only the cast heart events that NPC took part in or was present for (brain/src/story.ts). Optional, default empty."
     },
     "choice": {

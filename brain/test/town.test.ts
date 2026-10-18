@@ -10,7 +10,7 @@ import { CAST, pairKey } from "../src/cast.ts";
 import { seedRelationships } from "../src/graph.ts";
 import { dayKey, type PendingDay } from "../src/memory.ts";
 import { DEFAULT_FAKE_REPLY, fakeAdapter } from "../src/model.ts";
-import { SEASONS, type DayRef, type GameDay, type GameStats } from "../src/protocol.ts";
+import { MAIN_FARMER, SEASONS, type DayRef, type GameDay, type GameStats } from "../src/protocol.ts";
 import { seededRng, type Rng } from "../src/rng.ts";
 import { KNOWN_BY } from "../src/stats.ts";
 import { knowledgeBlock } from "../src/talk.ts";
@@ -24,7 +24,6 @@ import {
   FRIENDLY_TEXT_MAX,
   gossipNight,
   knownFactLines,
-  MAIN_FARMER,
   MAX_HOPS,
   newFact,
   OTHER_DECAY,
@@ -355,4 +354,3 @@ test("NPC relationships: every roster pair has a starting score, stored with the
   const onDisk = JSON.parse(await readFile(join(store.dir, SAVE, "_town.json"), "utf8")) as TownState;
   assert.deepEqual(onDisk.relationships, rel);
 });
-
