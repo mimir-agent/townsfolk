@@ -23,8 +23,11 @@ public sealed class ModConfig
     /// <summary>When true, every villager who can socialize goes through the brain.</summary>
     public bool AllNpcs { get; set; } = false;
 
-    /// <summary>How long to wait for one reply before giving up and keeping vanilla dialogue.</summary>
-    public int TimeoutSeconds { get; set; } = 8;
+    /// <summary>
+    /// How long to wait for one reply before giving up and keeping vanilla dialogue. A safety net
+    /// only: the brain answers or falls back sooner (TOWNSFOLK_TALK_MS, 20 s).
+    /// </summary>
+    public int TimeoutSeconds { get; set; } = 25;
 
     /// <summary>
     /// When false, the bridge never sends the world or asks for a plan: schedules, quests and
@@ -37,4 +40,13 @@ public sealed class ModConfig
     /// (TOWNSFOLK_PLAN_MS); this is a little longer so the brain's answer, even a fallback, arrives.
     /// </summary>
     public int PlanTimeoutSeconds { get; set; } = 150;
+
+    /// <summary>
+    /// Host computer only. When true, loading a save starts the bundled brain if nothing answers on
+    /// BrainUrl, and quitting the game stops it. Set false to run the brain yourself.
+    /// </summary>
+    public bool StartBrain { get; set; } = true;
+
+    /// <summary>Full path to node (24 or newer) when the mod cannot find it by itself. Empty: look on PATH and in the usual install folders.</summary>
+    public string NodePath { get; set; } = "";
 }

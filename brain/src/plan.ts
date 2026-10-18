@@ -46,6 +46,8 @@ export const HISTORY_NIGHTS = 7;
 export const STALL_DAYS = 28;
 export const RETIRED_KEPT = 5;
 export const PLAN_MAX_TOKENS = 4000;
+// The night's plan has its own model process (Sonnet), apart from every player's talk process.
+export const PLAN_SESSION = "plan";
 // Per NPC in the planner prompt: the newest raw memory days, and a cap on the whole block.
 export const PLAN_MEMORY_DAYS = 3;
 export const PLAN_MEMORY_CHARS = 1200;
@@ -172,7 +174,7 @@ function goalLine(npc: string, goal: Goal | undefined, need: GoalNeed, retired: 
   return `Goal: NEW NEEDED. ${why} Pick one new personal goal that fits ${day.season} and ${npc}, progress 0 to 20.${avoid}`;
 }
 
-const SYSTEM = `You plan tomorrow in Stardew Valley's Pelican Town for a fixed cast of villagers.
+export const PLAN_SYSTEM = `You plan tomorrow in Stardew Valley's Pelican Town for a fixed cast of villagers.
 Reply with ONE JSON object and nothing else: no prose, no markdown fences.
 Shape:
 {"npcs": [{"npc": string, "schedule": [{"time": number, "location": string, "x": number, "y": number, "facing": number}], "goal": {"text": string, "progress": number}}],
@@ -232,7 +234,7 @@ export function buildPlanPrompt(req: PlanRequest, ctx: PlanContext, cast: readon
   ]
     .filter(Boolean)
     .join("\n\n");
-  return { system: SYSTEM, user };
+  return { system: PLAN_SYSTEM, user };
 }
 
 // The other farmers in the game tonight, by farmerId, so a friendship shift can name one. Empty
@@ -323,7 +325,7 @@ export async function plan(
   const ask: Ask = (system, user) => {
     const remaining = deadline - Date.now();
     if (remaining < 500) return Promise.reject(new Error("plan deadline reached"));
-    return model.complete(system, user, AbortSignal.timeout(remaining), PLAN_MAX_TOKENS);
+    return model.complete(system, user, AbortSignal.timeout(remaining), PLAN_MAX_TOKENS, { session: PLAN_SESSION });
   };
   const prior = priorNights(ctx.state, req.day);
   const last = prior.at(-1);

@@ -36,6 +36,7 @@ export type GameStats = {
 // name. Both are optional on the wire: a request without farmerId is from the single-player
 // main farmer, whose memory section is keyed MAIN_FARMER until a world request names the host.
 export const MAIN_FARMER = "main";
+export const MAX_GAME_LINES = 8;
 export type FarmerRef = { farmerId?: string; farmerName?: string };
 
 export type TalkRequest = FarmerRef & {
@@ -49,6 +50,8 @@ export type TalkRequest = FarmerRef & {
   // The player already joined a happening today, so no join choice is offered again.
   joined?: boolean;
   transcript: TranscriptLine[];
+  // What the game's own dialogue had this NPC say to this farmer today, oldest first.
+  gameLines?: string[];
   stats: GameStats;
   // Ids of the game's scripted events the player has seen. story.ts keeps only the ones this
   // NPC was in. Empty when the bridge sends none.
@@ -60,7 +63,8 @@ export type TalkRequest = FarmerRef & {
 export type TalkFact = { text: string; shareable: boolean };
 
 // delta is the friendship change the bridge applies when this choice is picked.
-export type Choice = { id: string; text: string; delta: number; fact?: TalkFact; join?: true };
+// bye: the fixed goodbye the brain adds last; picking it ends the conversation with `closing`, no further call.
+export type Choice = { id: string; text: string; delta: number; fact?: TalkFact; join?: true; bye?: true; closing?: string };
 
 // The happening a join choice is about, as the bridge needs it to report the join.
 export type HappeningView = { location: string; topic: string; participants: string[] };
@@ -86,6 +90,8 @@ export type DayEvent =
   // The game's own dialogue answered this click, not ours (first meeting, a quest, a birthday,
   // story dialogue). Recorded so memory knows they talked; the game's words are not sent.
   | (EventBase & { type: "chat"; reason: VanillaReason })
+  // A line the game's own dialogue had npc say to the farmer (first meeting included), as shown.
+  | (EventBase & { type: "said"; line: string })
   // One of the game's own scripted events (cutscene, heart event, festival) the farmer watched,
   // recorded read-only once it ended (mod/SceneWatcher.cs). npc is the first villager actor and
   // witnesses are the other villager actors: every one of them took part (scenes.ts).
@@ -275,6 +281,9 @@ export function parseTalk(v: unknown): TalkRequest {
     if (o.speaker !== "npc" && o.speaker !== "player") throw new BadRequest(`transcript[${i}].speaker must be npc or player`);
     return { speaker: o.speaker, text: str(o.text, `transcript[${i}].text`, 400) };
   });
+  const gameLinesRaw = b.gameLines ?? [];
+  if (!Array.isArray(gameLinesRaw) || gameLinesRaw.length > MAX_GAME_LINES) throw new BadRequest(`gameLines must be an array of at most ${MAX_GAME_LINES} lines`);
+  const gameLines = gameLinesRaw.map((l, i) => str(l, `gameLines[${i}]`, 400));
   let recentChoice: TalkRequest["recentChoice"];
   if (b.recentChoice !== undefined && b.recentChoice !== null) {
     const c = obj(b.recentChoice, "recentChoice");
@@ -292,6 +301,7 @@ export function parseTalk(v: unknown): TalkRequest {
     recentChoice,
     ...(b.joined === true ? { joined: true } : {}),
     transcript,
+    ...(gameLines.length > 0 ? { gameLines } : {}),
     stats: parseStats(b.stats),
     eventsSeen: parseEventsSeen(b.eventsSeen),
   };
@@ -377,11 +387,14 @@ export function parseDayEnd(v: unknown): DayEndRequest {
       if (!VANILLA_REASONS.includes(o.reason as VanillaReason)) throw new BadRequest(`events[${i}].reason must be one of ${VANILLA_REASONS.join(", ")}`);
       return { type: "chat", ...base, reason: o.reason as VanillaReason };
     }
+    if (o.type === "said") {
+      return { type: "said", ...base, line: str(o.line, `events[${i}].line`, 400) };
+    }
     if (o.type === "scene") {
       if (typeof o.festival !== "boolean") throw new BadRequest(`events[${i}].festival must be a boolean`);
       return { type: "scene", ...base, eventId: eventId(o.eventId, `events[${i}].eventId`), festival: o.festival };
     }
-    throw new BadRequest(`events[${i}].type must be talk, gift, join, chat or scene`);
+    throw new BadRequest(`events[${i}].type must be talk, gift, join, chat, said or scene`);
   });
   const together = parseTogether(b.together);
   return { v: 1, saveId: name(b.saveId, "saveId"), playerName: str(b.playerName, "playerName", 40), day: parseDay(b.day), events, ...(together ? { together } : {}) };

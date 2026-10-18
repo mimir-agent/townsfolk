@@ -45,15 +45,23 @@ HOST (or playing alone)
       Close Command Prompt. The setting applies to windows you open afterwards.
       The key stays on your computer. Never share it or post a screenshot of it.
 
-5. Start the brain.
-   Double-click start-brain.cmd in Mods\Townsfolk. A black window opens and says
-     townsfolk brain on http://127.0.0.1:7341 ...
-   Leave it open while you play. Close it when you are done.
-   (Mac or Linux: run   sh start-brain.sh   in a terminal from that folder.)
+5. Start the game through SMAPI and load your farm. That is all.
+   The mod starts the brain by itself when the save loads, with no window, and stops it when you
+   quit the game. Its log is Mods\Townsfolk\brain.log. You install Node.js and Claude Code once
+   and never open the brain by hand.
 
-6. Start the brain before you load your farm. Then start Stardew Valley through SMAPI and load
-   your farm. Talk to Abigail, Pierre, Lewis, Emily or Shane. They pause for a moment while the
-   brain writes, then you pick a reply.
+   Fallback, only if the mod cannot start it (the SMAPI log says why): double-click
+   start-brain.cmd in Mods\Townsfolk and leave the window open (Mac or Linux: sh start-brain.sh).
+   If you do, you can set "StartBrain": false in config.json so the mod does not try as well.
+   If node is not found, set "NodePath" in config.json to the full path of node.
+
+6. Talk to anyone in town. A box with their name and portrait and moving dots stays up while the
+   reply is written, and the world waits, as in any conversation. Press Escape to leave. The last
+   reply is always a plain goodbye.
+
+   The first time you talk to each villager on a new save, you get the game's own introduction.
+   That is on purpose: it counts as meeting them and keeps the story intact. Claude takes over
+   from the second talk.
 
 
 JOINING PLAYER (you join someone else's game)
@@ -68,7 +76,7 @@ JOINING PLAYER (you join someone else's game)
 GOOD TO KNOW
 ------------
 
-- If the brain is not running, or Claude is slow (more than 8 seconds), people say their normal
+- If the brain is not running, or Claude is slow (more than 25 seconds), people say their normal
   game lines. Nothing breaks. The first meeting with someone, birthdays, quests and story
   scenes always use the game's own dialogue.
 - Memory is kept on the host's computer, one file per person, in
@@ -76,7 +84,7 @@ GOOD TO KNOW
     ~/.local/state/townsfolk/<save name>/        (Mac, Linux)
   Delete a file to make that person forget. A day is remembered only after the game saves it.
 - Mod settings are in Mods\Townsfolk\config.json, created the first time the game starts with
-  the mod. "AllNpcs": true lets every villager talk through the brain, not only the five above.
+  the mod. "AllNpcs": true lets every villager talk through the brain, not only the 26 villagers voiced by default.
 - Problems: the brain window shows one line per reply or error. The game writes its log to
     %APPDATA%\StardewValley\ErrorLogs\SMAPI-latest.txt
 - "could not find claude": Claude Code is not installed, or was installed after the brain

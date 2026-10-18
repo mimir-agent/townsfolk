@@ -38,7 +38,7 @@
       "required": ["type", "npc", "location", "time", "witnesses"],
       "dependentRequired": { "farmerId": ["farmerName"], "farmerName": ["farmerId"] },
       "properties": {
-        "type": { "enum": ["talk", "gift", "join", "chat", "scene"] },
+        "type": { "enum": ["talk", "gift", "join", "chat", "said", "scene"] },
         "farmerId": { "$ref": "common.schema.json#/$defs/farmerId", "description": "The farmer it happened with. The event lands only in that farmer's section of each NPC's memory. Optional: absent means the single-player main farmer, named by the day's playerName." },
         "farmerName": { "$ref": "common.schema.json#/$defs/farmerName" },
         "npc": { "$ref": "common.schema.json#/$defs/name", "description": "The NPC who took part." },
@@ -71,6 +71,14 @@
             "reason": { "enum": ["first-meeting", "quest", "birthday", "story"] }
           },
           "required": ["reason"]
+        },
+        {
+          "description": "A line the game's own dialogue had npc say to the farmer, as shown (first meeting included). Memory keeps it as 'I said (game line)'.",
+          "properties": {
+            "type": { "const": "said" },
+            "line": { "type": "string", "minLength": 1, "maxLength": 400 }
+          },
+          "required": ["line"]
         },
         {
           "description": "One of the game's own scripted events (cutscene, heart event, festival) the farmer watched, recorded read-only after it ended. npc is the first villager actor; witnesses are the other villager actors (at most 40). Every actor took part, so each remembers it as a participant; nobody else learns it except as gossip.",

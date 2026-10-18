@@ -5,7 +5,7 @@ import { createServer, type IncomingMessage, type Server, type ServerResponse } 
 import { CAST } from "./cast.ts";
 import { dateLabel, type MemoryStore, type NpcMemory } from "./memory.ts";
 import type { ModelAdapter } from "./model.ts";
-import { memoriesTonight, plan, todayFor } from "./plan.ts";
+import { memoriesTonight, PLAN_SESSION, PLAN_SYSTEM, plan, todayFor } from "./plan.ts";
 import {
   BadRequest,
   NotReady,
@@ -22,11 +22,14 @@ import {
   type TalkResponse,
   type WorldResponse,
 } from "./protocol.ts";
-import { talk } from "./talk.ts";
+import { talk, TALK_SYSTEM, talkSession } from "./talk.ts";
+import { MAIN_FARMER } from "./protocol.ts";
 
 export type BrainDeps = {
   store: MemoryStore;
   model: ModelAdapter;
+  // Used only by /v1/plan. Absent: the plan uses `model`.
+  planModel?: ModelAdapter;
   talkDeadlineMs: number;
   planDeadlineMs: number;
   log: (msg: string) => void;
@@ -90,6 +93,11 @@ export function createBrain(deps: BrainDeps): Server {
         const { v: _v, saveId, hostFarmerId, ...world } = parseWorld(await readJson(req));
         await deps.store.saveWorld(saveId, world);
         deps.log(`world ${saveId}: ${world.locations.length} locations, ${world.items.length} items, ${world.festivals.length} festivals`);
+        // Save loaded: start the host's talk process and the night's plan process now, so the first
+        // chat and the first night do not wait for a process to start. A farmhand's is started by
+        // their first talk.
+        deps.model.warm?.(talkSession(saveId, hostFarmerId ?? MAIN_FARMER), TALK_SYSTEM);
+        (deps.planModel ?? deps.model).warm?.(PLAN_SESSION, PLAN_SYSTEM);
         if (hostFarmerId !== undefined) {
           const { moved, kept } = await deps.store.setHost(saveId, hostFarmerId);
           if (moved.length > 0) deps.log(`world ${saveId}: host ${hostFarmerId}; moved single-player memory to the host for ${moved.join(", ")}`);
@@ -111,7 +119,7 @@ export function createBrain(deps: BrainDeps): Server {
           state: await deps.store.loadPlans(body.saveId),
           hostKey,
         };
-        const { response, night } = await plan(body, ctx, deps.model, { deadlineMs: deps.planDeadlineMs, log: deps.log });
+        const { response, night } = await plan(body, ctx, deps.planModel ?? deps.model, { deadlineMs: deps.planDeadlineMs, log: deps.log });
         if (night !== null) await deps.store.recordPlan(body.saveId, night);
         for (const d of response.dropped) deps.log(`plan ${body.saveId} ${dateLabel(body.day)} dropped ${d.part}: ${d.reason}`);
         deps.log(

@@ -23,8 +23,9 @@ public sealed record TalkFact(string Text, bool Shareable);
 /// <summary>
 /// A reply option. Delta is the friendship points to add on pick (the brain caps it at +-15).
 /// Join is true on the one join choice; its delta goes to every happening participant.
+/// Bye is true on the brain's fixed last choice: picking it ends the conversation with Closing and asks the brain nothing more.
 /// </summary>
-public sealed record TalkChoice(string Id, string Text, int Delta, TalkFact? Fact = null, bool? Join = null);
+public sealed record TalkChoice(string Id, string Text, int Delta, TalkFact? Fact = null, bool? Join = null, bool? Bye = null, string? Closing = null);
 
 /// <summary>The happening a join choice is about. Present only when a join choice is offered.</summary>
 public sealed record HappeningView(string Location, string Topic, List<string> Participants);
@@ -50,7 +51,8 @@ public sealed record TalkRequest(
     bool? Joined,
     List<string> EventsSeen,
     string? FarmerId = null,
-    string? FarmerName = null)
+    string? FarmerName = null,
+    List<string>? GameLines = null)
 {
     public int V { get; init; } = BrainClient.ProtocolVersion;
 }
@@ -77,7 +79,8 @@ public sealed record DayEvent(
     string? FarmerId = null,
     string? FarmerName = null,
     string? EventId = null,
-    bool? Festival = null);
+    bool? Festival = null,
+    string? Line = null);
 
 /// <summary>NPCs seen on the same map at the same time today. Gossip passes between them overnight.</summary>
 public sealed record Together(string Location, List<string> Npcs);
