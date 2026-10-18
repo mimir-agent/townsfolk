@@ -12,6 +12,20 @@
     "day": { "$ref": "common.schema.json#/$defs/dayRef" },
     "stats": { "$ref": "talk-request.schema.json#/properties/stats" },
     "eventsSeen": { "$ref": "common.schema.json#/$defs/eventsSeen" },
+    "farmers": {
+      "type": "array",
+      "maxItems": 8,
+      "description": "Every farmer in the game tonight, host included, with that farmer's own hearts. A friendship shift in the response may name one of them by farmerId; a shift naming anyone else is dropped with a reason. Optional: absent in single player.",
+      "items": {
+        "type": "object",
+        "required": ["farmerId", "farmerName", "hearts"],
+        "properties": {
+          "farmerId": { "$ref": "common.schema.json#/$defs/farmerId" },
+          "farmerName": { "$ref": "common.schema.json#/$defs/farmerName" },
+          "hearts": { "$ref": "#/properties/hearts" }
+        }
+      }
+    },
     "hearts": {
       "type": "object",
       "description": "The farmer's friendship hearts with each NPC (0 to 10, up to 14 for a spouse), keyed by NPC name. The planner uses it to pick how open each character is with the farmer. Optional: an NPC left out is planned at 0 hearts, the guarded tier. The bridge does not send it yet.",

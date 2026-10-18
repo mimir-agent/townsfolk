@@ -2,9 +2,10 @@
 // validate, retry once, and fall back to a safe canned line so the game never waits forever.
 
 import type { ModelAdapter } from "./model.ts";
-import type { NpcMemory } from "./memory.ts";
-import { dateLabel } from "./memory.ts";
+import type { FarmerMemory, NpcMemory } from "./memory.ts";
+import { dateLabel, farmerKey, sectionFor } from "./memory.ts";
 import type { Choice, GameStats, Happening, HappeningView, TalkFact, TalkRequest, TalkResponse } from "./protocol.ts";
+import { MAIN_FARMER } from "./protocol.ts";
 import { describeStats, statsFor } from "./stats.ts";
 import { storyFor } from "./story.ts";
 import { knownFactLines, type TownState } from "./town.ts";
@@ -77,11 +78,32 @@ function todayBlock(req: TalkRequest, ctx: TalkContext, offer: HappeningView | n
       ? `Today ${req.npc} is part of this, at ${h.location} from ${h.start} to ${h.end} with ${h.participants.filter((p) => p !== req.npc).join(", ")}: ${h.topic}.`
       : "",
     offer
-      ? `${req.playerName} has walked up while it is going on. Exactly one choice must be ${req.playerName} asking to join in; mark that choice with "join": true. The others are normal replies.`
+      ? `${talkerName(req)} has walked up while it is going on. Exactly one choice must be ${talkerName(req)} asking to join in; mark that choice with "join": true. The others are normal replies.`
       : "",
   ]
     .filter(Boolean)
     .join("\n");
+}
+
+// Characters of another farmer's latest season summary that reach the prompt.
+export const OTHER_FARMER_SUMMARY = 150;
+
+// The talking farmer's name: farmerName when the request names a farmer, else playerName (the
+// single-player main farmer, as before multiplayer).
+export function talkerName(req: TalkRequest): string {
+  return req.farmerName ?? req.playerName;
+}
+
+// One short line about a farmer this NPC knows who is not the one talking, so the NPC can mention
+// them without their history reaching the prompt: no entry and no full summary, only counts, the
+// last day, and the start of the latest season summary.
+export function otherFarmerLine(sec: FarmerMemory): string {
+  const name = sec.farmerName || "another farmer";
+  const lastEntry = sec.entries.at(-1);
+  const lastSeason = sec.seasons.at(-1);
+  const last = lastEntry ? dateLabel(lastEntry.day) : lastSeason ? `${lastSeason.season} of year ${lastSeason.year}` : null;
+  const summary = lastSeason ? ` Latest season: ${lastSeason.text.slice(0, OTHER_FARMER_SUMMARY)}` : "";
+  return `- ${name}: ${sec.talks} ${sec.talks === 1 ? "talk" : "talks"}${last ? `, last seen ${last}` : ""}.${summary}`;
 }
 
 export function buildPrompt(
@@ -91,34 +113,42 @@ export function buildPrompt(
   ctx: TalkContext,
   mustEnd: boolean,
   offer: HappeningView | null,
+  hostKey: string = MAIN_FARMER,
 ): { system: string; user: string } {
+  const who = talkerName(req);
+  const key = farmerKey(req, hostKey);
+  const sec = sectionFor(mem, key);
   const memory =
-    mem.entries.length === 0 && mem.seasons.length === 0 && mem.years === ""
+    sec.entries.length === 0 && sec.seasons.length === 0 && sec.years === ""
       ? tierFor(req.friendship.hearts) === "0-2"
-        ? `You have no memories of ${req.playerName} yet; treat them as someone you are just getting to know.`
-        : `You have no specific memories of ${req.playerName} to draw on; keep to how close you already are, as the heart tier above says.`
+        ? `You have no memories of ${who} yet; treat them as someone you are just getting to know.`
+        : `You have no specific memories of ${who} to draw on; keep to how close you already are, as the heart tier above says.`
       : [
-          mem.firstMet
-            ? `First met ${req.playerName}: ${mem.firstMet}. Talks so far: ${mem.talks}. Gifts received: ${mem.gifts}.`
-            : `You have never spoken with ${req.playerName}; you have only seen them around.`,
-          mem.years ? `Long ago: ${mem.years}` : "",
-          ...mem.seasons.map((s) => `Earlier, ${s.season} of year ${s.year} (by day of month): ${s.text}`),
-          mem.entries.length > 0 ? "Recent days:" : "",
-          ...mem.entries.map((e) => `- ${dateLabel(e.day)}: ${e.text}`),
+          sec.firstMet
+            ? `First met ${who}: ${sec.firstMet}. Talks so far: ${sec.talks}. Gifts received: ${sec.gifts}.`
+            : `You have never spoken with ${who}; you have only seen them around.`,
+          sec.years ? `Long ago: ${sec.years}` : "",
+          ...sec.seasons.map((s) => `Earlier, ${s.season} of year ${s.year} (by day of month): ${s.text}`),
+          sec.entries.length > 0 ? "Recent days:" : "",
+          ...sec.entries.map((e) => `- ${dateLabel(e.day)}: ${e.text}`),
         ]
           .filter(Boolean)
           .join("\n");
-  const convo = req.transcript.map((t) => `${t.speaker === "npc" ? req.npc : req.playerName}: ${t.text}`).join("\n");
+  const others = Object.entries(mem.farmers).filter(([k]) => k !== key);
+  const convo = req.transcript.map((t) => `${t.speaker === "npc" ? req.npc : who}: ${t.text}`).join("\n");
   const user = [
     `Character: ${req.npc}`,
     talkCard(req.npc, req.friendship.hearts),
     `Now: ${dateLabel(req.day)}, ${req.day.time} (24h clock), weather ${req.day.weather}, at ${req.day.location}.`,
-    `Talking with: ${req.playerName}, friendship ${req.friendship.hearts} hearts.`,
+    `Talking with: ${who}, friendship ${req.friendship.hearts} hearts.`,
     `Memory (only what ${req.npc} took part in or saw):\n${memory}`,
+    others.length > 0
+      ? `Other farmers ${req.npc} knows (each has their own history with ${req.npc}; ${req.npc} may mention them by name, but nothing above happened with them and nothing here happened with ${who}):\n${others.map(([, s]) => otherFarmerLine(s)).join("\n")}`
+      : "",
     knowledgeBlock(req.npc, req.stats, town, req.eventsSeen),
     todayBlock(req, ctx, offer),
-    convo ? `Conversation so far:\n${convo}` : `${req.playerName} just walked up to start a conversation.`,
-    req.recentChoice ? `${req.playerName} just said: "${req.recentChoice.text}". Respond to that.` : "",
+    convo ? `Conversation so far:\n${convo}` : `${who} just walked up to start a conversation.`,
+    req.recentChoice ? `${who} just said: "${req.recentChoice.text}". Respond to that.` : "",
     mustEnd ? `This is the last turn: set "end" to true and close the conversation naturally.` : "",
   ]
     .filter(Boolean)
@@ -239,11 +269,11 @@ export async function talk(
   town: TownState,
   ctx: TalkContext,
   model: ModelAdapter,
-  opts: { deadlineMs: number; log: (msg: string) => void },
+  opts: { deadlineMs: number; log: (msg: string) => void; hostKey?: string },
 ): Promise<TalkResponse> {
   const mustEnd = playerTurns(req) >= MAX_TURNS;
   const offer = joinOffer(req, ctx, mustEnd);
-  const { system, user } = buildPrompt(req, mem, town, ctx, mustEnd, offer);
+  const { system, user } = buildPrompt(req, mem, town, ctx, mustEnd, offer, opts.hostKey ?? MAIN_FARMER);
   const deadline = Date.now() + opts.deadlineMs;
   for (let attempt = 1; attempt <= 2; attempt++) {
     const remaining = deadline - Date.now();

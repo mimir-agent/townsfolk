@@ -11,10 +11,10 @@
 // after restoring an older save, never stacks.
 
 import { CAST, type CastMember } from "./cast.ts";
-import { applyDay, dateLabel, dayKey, emptyMemory, shareByNpc, type NpcMemory, type PendingDay } from "./memory.ts";
+import { applyDay, dateLabel, dayKey, emptyMemory, sectionFor, shareByNpc, type NpcMemory, type PendingDay } from "./memory.ts";
 import type { ModelAdapter } from "./model.ts";
-import type { DayRef, DroppedPart, GoalView, Happening, PlannedSchedule, PlanRequest, PlanResponse, RelationshipShift, ScheduleStop } from "./protocol.ts";
-import { SEASONS } from "./protocol.ts";
+import type { DayRef, DroppedPart, FriendshipShift, GoalView, Happening, PlannedSchedule, PlanRequest, PlanResponse, RelationshipShift, ScheduleStop } from "./protocol.ts";
+import { MAIN_FARMER, SEASONS } from "./protocol.ts";
 import { knowledgeBlock, type TalkContext } from "./talk.ts";
 import { relationship, type TownState } from "./town.ts";
 import {
@@ -112,29 +112,34 @@ export type PlanContext = {
   town: TownState;
   memories: Map<string, NpcMemory>;
   state: PlanState;
+  // The section key of the host, whose memory and hearts the plan reads (MemoryStore.hostKey).
+  hostKey: string;
 };
 
 // What each cast member remembers, as of tonight. The day just ended is still pending (it is
 // committed only when the game saves), so its share is folded in here, in memory only, from the
 // same per-NPC split the commit uses. Nothing is written.
-export function memoriesTonight(stored: Map<string, NpcMemory>, pending: PendingDay | null, day: DayRef): Map<string, NpcMemory> {
+export function memoriesTonight(stored: Map<string, NpcMemory>, pending: PendingDay | null, day: DayRef, hostKey: string = MAIN_FARMER): Map<string, NpcMemory> {
   if (pending === null || dayKey(pending.day) !== dayKey(day) - 1) return stored;
   const share = shareByNpc(pending.events);
   const out = new Map(stored);
   for (const npc of CAST) {
     const mem = out.get(npc);
     const mine = share.get(npc);
-    if (mem !== undefined && mine !== undefined) out.set(npc, applyDay(mem, pending.day, mine, pending.playerName));
+    if (mem !== undefined && mine !== undefined) out.set(npc, applyDay(mem, pending.day, mine, pending.playerName, hostKey));
   }
   return out;
 }
 
-function memoryLines(mem: NpcMemory): string {
-  const season = mem.seasons.at(-1);
+// The planner reads the host's section: the plan's hearts and tiers are the host's. Other
+// farmers reach the planner only as the farmers list (see buildPlanPrompt).
+function memoryLines(mem: NpcMemory, hostKey: string): string {
+  const sec = sectionFor(mem, hostKey);
+  const season = sec.seasons.at(-1);
   const lines = [
-    mem.years ? `Long ago: ${mem.years}` : "",
+    sec.years ? `Long ago: ${sec.years}` : "",
     season ? `${season.season} of year ${season.year}: ${season.text}` : "",
-    ...mem.entries.slice(-PLAN_MEMORY_DAYS).map((e) => `${dateLabel(e.day)}: ${e.text}`),
+    ...sec.entries.slice(-PLAN_MEMORY_DAYS).map((e) => `${dateLabel(e.day)}: ${e.text}`),
   ].filter(Boolean);
   const text = lines.length > 0 ? lines.join("\n") : "Nothing yet with the farmer.";
   // Keep the newest end when cutting: recent days matter most for tomorrow.
@@ -200,7 +205,7 @@ export function buildPlanPrompt(req: PlanRequest, ctx: PlanContext, cast: readon
       planCard(npc, req.hearts[npc] ?? 0),
       goalLine(npc, goal, need, avoid, req.day),
       `Feelings toward the others (-100 to 100): ${others}.`,
-      `Memory (only what ${npc} took part in or saw):\n${memoryLines(ctx.memories.get(npc) ?? emptyMemory(npc))}`,
+      `Memory (only what ${npc} took part in or saw):\n${memoryLines(ctx.memories.get(npc) ?? emptyMemory(npc), ctx.hostKey)}`,
       knowledgeBlock(npc, req.stats, ctx.town, req.eventsSeen),
     ]
       .filter(Boolean)
@@ -218,13 +223,55 @@ export function buildPlanPrompt(req: PlanRequest, ctx: PlanContext, cast: readon
   const user = [
     calendarLines(ctx.world, req.day),
     `The farmer: ${req.playerName}.`,
+    farmhandLine(req, ctx.hostKey),
     `Locations (name, width x height in tiles): ${ctx.world.locations.map((l) => `${l.name} ${l.width}x${l.height}`).join(", ")}.`,
     `Items for quests (id = name): ${ctx.world.items.map((i) => `${i.id} = ${i.name}`).join(", ")}.`,
     `Recent plans, last ${HISTORY_NIGHTS} nights (vary from these):\n${digest}`,
     `Plan tomorrow for: ${cast.join(", ")}.`,
     ...blocks,
-  ].join("\n\n");
+  ]
+    .filter(Boolean)
+    .join("\n\n");
   return { system: SYSTEM, user };
+}
+
+// The other farmers in the game tonight, by farmerId, so a friendship shift can name one. Empty
+// in single player (no farmers list, or only the host), so that prompt is unchanged.
+function farmhandLine(req: PlanRequest, hostKey: string): string {
+  const others = (req.farmers ?? []).filter((f) => f.farmerId !== hostKey);
+  if (others.length === 0) return "";
+  return `Other farmers in town (a "friendship" entry may add "farmerId" to be about one of them; without it, it is about ${req.playerName}): ${others.map((f) => `${f.farmerName} = ${f.farmerId}`).join(", ")}.`;
+}
+
+// Friendship shifts are per farmer: one without farmerId is the host's. A shift naming a farmerId
+// that is not in tonight's farmers list is dropped with a reason. A shift naming the host's own
+// farmerId is the host's, so it is returned without farmerId, the same as one that left it out.
+// Each farmer's shifts then go through checkFriendship on their own, so two farmers may each get
+// a shift from the same NPC.
+export function checkFarmerFriendship(raw: unknown[], farmers: PlanRequest["farmers"], hostKey: string): { kept: FriendshipShift[]; dropped: DroppedPart[] } {
+  const known = new Set((farmers ?? []).map((f) => f.farmerId));
+  const groups = new Map<string, unknown[]>();
+  const dropped: DroppedPart[] = [];
+  for (const [i, c] of raw.entries()) {
+    const id = typeof c === "object" && c !== null ? (c as Record<string, unknown>).farmerId : undefined;
+    if (id === undefined || id === hostKey) {
+      groups.set("", [...(groups.get("") ?? []), c]);
+      continue;
+    }
+    const npc = typeof c === "object" && c !== null && typeof (c as Record<string, unknown>).npc === "string" ? (c as Record<string, unknown>).npc : `#${i + 1}`;
+    if (typeof id !== "string" || !known.has(id)) {
+      dropped.push({ part: `friendship ${npc as string}`, reason: `farmerId ${JSON.stringify(id)} is not one of tonight's farmers` });
+      continue;
+    }
+    groups.set(id, [...(groups.get(id) ?? []), c]);
+  }
+  const kept: FriendshipShift[] = [];
+  for (const [id, list] of groups) {
+    const f = checkFriendship(list);
+    kept.push(...f.kept.map((k) => (id === "" ? k : { ...k, farmerId: id })));
+    dropped.push(...f.dropped.map((d) => (id === "" ? d : { ...d, part: `${d.part} for farmer ${id}` })));
+  }
+  return { kept, dropped };
 }
 
 const REGEN_SYSTEM = `You replan schedules for Stardew Valley villagers whose plan for tomorrow repeated a recent day.
@@ -390,7 +437,7 @@ export async function plan(
   dropped.push(...h.dropped);
   const q = checkQuests(raw.quests, ctx.world, questId(req.day));
   dropped.push(...q.dropped);
-  const f = checkFriendship(raw.friendship);
+  const f = checkFarmerFriendship(raw.friendship, req.farmers, ctx.hostKey);
   dropped.push(...f.dropped);
   const r = checkRelationships(raw.relationships);
   dropped.push(...r.dropped);

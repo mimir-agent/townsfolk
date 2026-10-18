@@ -31,7 +31,14 @@ export type GameStats = {
   money?: number;
 };
 
-export type TalkRequest = {
+// Every farmer, host or farmhand, has an independent history with each NPC. farmerId is the
+// decimal form of the game's Farmer.UniqueMultiplayerID; farmerName is that farmer's display
+// name. Both are optional on the wire: a request without farmerId is from the single-player
+// main farmer, whose memory section is keyed MAIN_FARMER until a world request names the host.
+export const MAIN_FARMER = "main";
+export type FarmerRef = { farmerId?: string; farmerName?: string };
+
+export type TalkRequest = FarmerRef & {
   v: 1;
   saveId: string;
   npc: string;
@@ -69,7 +76,8 @@ export type TalkResponse = {
 
 // npc took part; witnesses are the other NPCs in the same location at the time. For a join,
 // witnesses are the other happening participants only.
-type EventBase = { npc: string; location: string; time: number; witnesses: string[] };
+// farmerId and farmerName: the farmer it happened with (FarmerRef above).
+type EventBase = FarmerRef & { npc: string; location: string; time: number; witnesses: string[] };
 
 export type DayEvent =
   | (EventBase & { type: "talk"; npcLine: string; playerChoice?: string; fact?: TalkFact })
@@ -104,6 +112,10 @@ export type WorldRequest = {
   items: WorldItem[];
   festivals: CalendarDay[];
   married: string[];
+  // The host's farmerId. A world request that carries it moves every NPC's MAIN_FARMER memory
+  // section to this id (memory.ts MemoryStore.setHost), and from then on a request without a
+  // farmerId is the host's.
+  hostFarmerId?: string;
 };
 export type WorldResponse = { v: 1; ok: true };
 
@@ -111,14 +123,28 @@ export type WorldResponse = { v: 1; ok: true };
 // hearts: the farmer's friendship hearts with each NPC, so the planner picks each card's heart
 // tier. An NPC left out (or a bridge that sends no map yet) is planned at 0 hearts, the guarded tier.
 // eventsSeen: as in TalkRequest; the planner gives each NPC only its own scenes.
-export type PlanRequest = { v: 1; saveId: string; playerName: string; day: DayRef; stats: GameStats; hearts: Record<string, number>; eventsSeen: string[] };
+// farmers: every farmer in the game tonight, with that farmer's own hearts. A friendship shift
+// may name one of them by farmerId; a shift naming anyone else is dropped. A bridge that
+// predates multiplayer sends none.
+export type PlanFarmer = { farmerId: string; farmerName: string; hearts: Record<string, number> };
+export type PlanRequest = {
+  v: 1;
+  saveId: string;
+  playerName: string;
+  day: DayRef;
+  stats: GameStats;
+  hearts: Record<string, number>;
+  eventsSeen: string[];
+  farmers?: PlanFarmer[];
+};
 
 export type ScheduleStop = { time: number; location: string; x: number; y: number; facing: number };
 export type PlannedSchedule = { npc: string; stops: ScheduleStop[] };
 export type GoalView = { npc: string; text: string; progress: number; isNew: boolean };
 export type Happening = { location: string; start: number; end: number; participants: string[]; topic: string };
 export type MailQuest = { id: string; item: string; from: string; reward: number; text: string };
-export type FriendshipShift = { npc: string; delta: number; reason: string };
+// farmerId absent: the shift is for the host.
+export type FriendshipShift = { npc: string; delta: number; reason: string; farmerId?: string };
 export type RelationshipShift = { a: string; b: string; delta: number; reason: string };
 export type DroppedPart = { part: string; reason: string };
 
@@ -157,6 +183,10 @@ const MAX_FESTIVALS = 40;
 // A long save has seen a few hundred events at most; the cap only bounds the body.
 const MAX_EVENTS_SEEN = 2000;
 const EVENT_ID = /^[A-Za-z0-9_.-]{1,60}$/;
+// Farmer.UniqueMultiplayerID is a signed 64-bit integer, sent in decimal.
+const FARMER_ID = /^-?[0-9]{1,20}$/;
+// The game allows at most 8 farmers in one save.
+export const MAX_FARMERS = 8;
 // Location names end up in game schedule strings, which split on spaces and slashes.
 export const LOCATION_NAME = /^[A-Za-z0-9_.-]{1,80}$/;
 
@@ -188,6 +218,22 @@ function name(v: unknown, where: string): string {
 
 function optStr(v: unknown, where: string, max: number): string | undefined {
   return v === undefined || v === null ? undefined : str(v, where, max);
+}
+
+function farmerId(v: unknown, where: string): string {
+  const s = str(v, where, 21);
+  if (!FARMER_ID.test(s)) throw new BadRequest(`${where} must be a decimal farmer id`);
+  return s;
+}
+
+// Both or neither. A name alone cannot say whose memory section it is, and an id alone leaves
+// the NPC without a name to remember the farmer by.
+function farmerRef(o: Record<string, unknown>, where: string): FarmerRef {
+  const hasId = o.farmerId !== undefined && o.farmerId !== null;
+  const hasName = o.farmerName !== undefined && o.farmerName !== null;
+  if (hasId !== hasName) throw new BadRequest(`${where}farmerId and ${where}farmerName come together or not at all`);
+  if (!hasId) return {};
+  return { farmerId: farmerId(o.farmerId, `${where}farmerId`), farmerName: str(o.farmerName, `${where}farmerName`, 40) };
 }
 
 // Body plus version check. Any v other than 1 (or none) is a 400, which the bridge treats as brain down.
@@ -234,6 +280,7 @@ export function parseTalk(v: unknown): TalkRequest {
     saveId: name(b.saveId, "saveId"),
     npc: name(b.npc, "npc"),
     playerName: str(b.playerName, "playerName", 40),
+    ...farmerRef(b, ""),
     day: parseDay(b.day),
     friendship: { hearts: num(f.hearts, "friendship.hearts"), points: num(f.points, "friendship.points") },
     recentChoice,
@@ -298,6 +345,7 @@ export function parseDayEnd(v: unknown): DayEndRequest {
     const o = obj(e, `events[${i}]`);
     const npc = name(o.npc, `events[${i}].npc`);
     const base: EventBase = {
+      ...farmerRef(o, `events[${i}].`),
       npc,
       location: str(o.location, `events[${i}].location`, 80),
       time: int(o.time, `events[${i}].time`, 600, 2600),
@@ -358,12 +406,37 @@ export function parseWorld(v: unknown): WorldRequest {
     return { season: o.season as Season, day: int(o.day, `festivals[${i}].day`, 1, 28), name: str(o.name, `festivals[${i}].name`, 60) };
   });
   const married = list(b.married, "married", MAX_WITNESSES).map((n, i) => name(n, `married[${i}]`));
-  return { v: 1, saveId: name(b.saveId, "saveId"), locations, items, festivals, married };
+  const host = b.hostFarmerId === undefined || b.hostFarmerId === null ? {} : { hostFarmerId: farmerId(b.hostFarmerId, "hostFarmerId") };
+  return { v: 1, saveId: name(b.saveId, "saveId"), locations, items, festivals, married, ...host };
 }
 
 export function parsePlan(v: unknown): PlanRequest {
   const b = body(v);
-  return { v: 1, saveId: name(b.saveId, "saveId"), playerName: str(b.playerName, "playerName", 40), day: parseDayRef(b.day, "day"), stats: parseStats(b.stats), hearts: parseHearts(b.hearts), eventsSeen: parseEventsSeen(b.eventsSeen) };
+  const farmers = parseFarmers(b.farmers);
+  return {
+    v: 1,
+    saveId: name(b.saveId, "saveId"),
+    playerName: str(b.playerName, "playerName", 40),
+    day: parseDayRef(b.day, "day"),
+    stats: parseStats(b.stats),
+    hearts: parseHearts(b.hearts, "hearts"),
+    eventsSeen: parseEventsSeen(b.eventsSeen),
+    ...(farmers ? { farmers } : {}),
+  };
+}
+
+function parseFarmers(v: unknown): PlanFarmer[] | undefined {
+  if (v === undefined || v === null) return undefined;
+  const farmers = list(v, "farmers", MAX_FARMERS).map((f, i): PlanFarmer => {
+    const o = obj(f, `farmers[${i}]`);
+    return {
+      farmerId: farmerId(o.farmerId, `farmers[${i}].farmerId`),
+      farmerName: str(o.farmerName, `farmers[${i}].farmerName`, 40),
+      hearts: parseHearts(o.hearts, `farmers[${i}].hearts`),
+    };
+  });
+  if (new Set(farmers.map((f) => f.farmerId)).size !== farmers.length) throw new BadRequest("farmers has duplicate farmerIds");
+  return farmers;
 }
 
 // Event ids the player has seen. Duplicates are dropped; order does not matter.
@@ -378,10 +451,10 @@ function parseEventsSeen(v: unknown): string[] {
 }
 
 // 0 to 14: 10 is the cap for a friend, 14 for a spouse.
-function parseHearts(v: unknown): Record<string, number> {
+function parseHearts(v: unknown, where: string): Record<string, number> {
   if (v === undefined || v === null) return {};
-  const h = obj(v, "hearts");
+  const h = obj(v, where);
   const out: Record<string, number> = {};
-  for (const [npc, n] of Object.entries(h)) out[name(npc, "hearts key")] = int(n, `hearts.${npc}`, 0, 14);
+  for (const [npc, n] of Object.entries(h)) out[name(npc, `${where} key`)] = int(n, `${where}.${npc}`, 0, 14);
   return out;
 }

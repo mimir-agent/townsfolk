@@ -79,13 +79,14 @@
     },
     "friendship": {
       "type": "array",
-      "maxItems": 8,
-      "description": "Friendship point changes toward the player.",
+      "maxItems": 64,
+      "description": "Friendship point changes toward a farmer: at most one per cast member per farmer (8 cast x up to 8 farmers).",
       "items": {
         "type": "object",
         "additionalProperties": false,
         "required": ["npc", "delta", "reason"],
         "properties": {
+          "farmerId": { "$ref": "common.schema.json#/$defs/farmerId", "description": "The farmer this shift is for, one of the request's farmers. Absent: the host (or the single-player farmer)." },
           "npc": { "$ref": "#/$defs/cast" },
           "delta": { "type": "integer", "minimum": -40, "maximum": 40, "not": { "const": 0 } },
           "reason": { "$ref": "#/$defs/reason" }

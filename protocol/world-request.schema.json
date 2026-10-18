@@ -8,6 +8,10 @@
   "properties": {
     "v": { "$ref": "common.schema.json#/$defs/v" },
     "saveId": { "$ref": "common.schema.json#/$defs/name" },
+    "hostFarmerId": {
+      "$ref": "common.schema.json#/$defs/farmerId",
+      "description": "The host's farmerId. The brain moves every NPC's single-player memory section (\"main\", including files written before multiplayer) to this id, and from then on a request without farmerId is the host's. Optional."
+    },
     "locations": {
       "type": "array",
       "maxItems": 200,

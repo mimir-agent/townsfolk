@@ -18,7 +18,7 @@ import type { AddressInfo } from "node:net";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { CAST, pairKey, type CastMember } from "../src/cast.ts";
-import { clock, dateLabel, MAX_FILE_BYTES, MemoryStore } from "../src/memory.ts";
+import { clock, dateLabel, fileBudget, MemoryStore } from "../src/memory.ts";
 import type { ModelAdapter } from "../src/model.ts";
 import { nextDay } from "../src/plan.ts";
 import type { DayEvent, DayRef, GameDay, PlanResponse, ScheduleStop, TalkResponse, Together, TranscriptLine } from "../src/protocol.ts";
@@ -341,7 +341,8 @@ export async function runSim(opts: SimOptions): Promise<SimResult> {
         if (f.startsWith("_") || !f.endsWith(".json")) continue;
         const size = (await stat(join(dir, f))).size;
         maxMemory = Math.max(maxMemory, size);
-        if (size > MAX_FILE_BYTES) failures.memory.push(`${dateLabel(date)}: ${f} is ${size} bytes`);
+        // One farmer in this sim, so the single-player budget (32 KB) applies.
+        if (size > fileBudget(1)) failures.memory.push(`${dateLabel(date)}: ${f} is ${size} bytes`);
         if (f !== `${CANARY_HOLDER}.json`) {
           const mem = JSON.stringify(await store.load(saveId, f.slice(0, -5)));
           if (mem.includes(CANARY)) leaks.push(`${dateLabel(date)}: memory file ${f}`);
