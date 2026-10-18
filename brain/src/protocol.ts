@@ -75,6 +75,8 @@ export type TalkResponse = {
   choices: Choice[];
   end: boolean;
   source: "model" | "fallback";
+  // Only on a fallback: why the model gave no usable reply, in plain words for the logs.
+  reason?: string;
   happening?: HappeningView;
 };
 
@@ -175,7 +177,9 @@ export type PlanResponse = {
   dropped: DroppedPart[];
 };
 
-export type HealthResponse = { v: 1; ok: true; model: string };
+// version: the brain's package.json version, which the mod compares with its own at save load.
+// ready false: every talk will fall back (claude missing or not logged in); reason says why.
+export type HealthResponse = { v: 1; ok: true; model: string; version: string; ready: boolean; reason?: string };
 export type ErrorResponse = { v: 1; error: string };
 
 export class BadRequest extends Error {}

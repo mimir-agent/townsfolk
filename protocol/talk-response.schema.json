@@ -33,6 +33,7 @@
     },
     "end": { "type": "boolean" },
     "source": { "enum": ["model", "fallback"] },
+    "reason": { "type": "string", "minLength": 1, "maxLength": 300, "description": "Only on a fallback: why no usable reply came (claude not found, an error result, a reply that failed validation, the deadline). For logs, never shown as dialogue." },
     "happening": {
       "type": "object",
       "additionalProperties": false,
