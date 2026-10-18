@@ -6,6 +6,7 @@ import type { NpcMemory } from "./memory.ts";
 import { dateLabel } from "./memory.ts";
 import type { Choice, GameStats, Happening, HappeningView, TalkFact, TalkRequest, TalkResponse } from "./protocol.ts";
 import { describeStats, statsFor } from "./stats.ts";
+import { storyFor } from "./story.ts";
 import { knownFactLines, type TownState } from "./town.ts";
 import { talkCard, tierFor } from "./voices.ts";
 
@@ -49,13 +50,17 @@ export function joinOffer(req: TalkRequest, ctx: TalkContext, mustEnd: boolean):
   return { location: h.location, topic: h.topic, participants: h.participants };
 }
 
-// The parts of a prompt that depend on what this NPC knows beyond its own memory: the stats it
-// may know and the facts it holds. Every prompt built for an NPC (talk now, the planner later)
-// goes through here, so the knowledge boundary is enforced in one place.
-export function knowledgeBlock(npc: string, stats: GameStats, town: TownState): string {
+// The parts of a prompt that depend on what this NPC knows beyond its own memory: the game's
+// scenes it was in (story.ts), the stats it may know and the facts it holds. Every prompt built
+// for an NPC (talk and plan) goes through here, so the knowledge boundary is enforced in one place.
+export function knowledgeBlock(npc: string, stats: GameStats, town: TownState, eventsSeen: readonly string[]): string {
   const statLines = describeStats(statsFor(npc, stats));
   const factLines = knownFactLines(town, npc);
+  const story = storyFor(npc, eventsSeen);
   return [
+    story.length > 0
+      ? `Moments ${npc} shared with the farmer, in ${npc}'s own words (they happened; ${npc} may bring one up when it fits, never retell it word for word):\n${story.map((s) => `- ${s}`).join("\n")}`
+      : "",
     statLines.length > 0 ? `What ${npc} knows about the farmer's life here:\n${statLines.join("\n")}` : "",
     factLines.length > 0 ? `Things ${npc} has heard or been told:\n${factLines.join("\n")}` : "",
   ]
@@ -110,7 +115,7 @@ export function buildPrompt(
     `Now: ${dateLabel(req.day)}, ${req.day.time} (24h clock), weather ${req.day.weather}, at ${req.day.location}.`,
     `Talking with: ${req.playerName}, friendship ${req.friendship.hearts} hearts.`,
     `Memory (only what ${req.npc} took part in or saw):\n${memory}`,
-    knowledgeBlock(req.npc, req.stats, town),
+    knowledgeBlock(req.npc, req.stats, town, req.eventsSeen),
     todayBlock(req, ctx, offer),
     convo ? `Conversation so far:\n${convo}` : `${req.playerName} just walked up to start a conversation.`,
     req.recentChoice ? `${req.playerName} just said: "${req.recentChoice.text}". Respond to that.` : "",

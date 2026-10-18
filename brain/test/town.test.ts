@@ -79,7 +79,7 @@ test("canary, day 1: only Emily's talk prompt carries CANARY-123; after a seeded
 test("canary, planner side: knowledgeBlock (the shared per-NPC block the planner will use) carries CANARY-123 for Emily only", () => {
   const town = canaryTown(true);
   for (const npc of CAST) {
-    const block = knowledgeBlock(npc, {}, town);
+    const block = knowledgeBlock(npc, {}, town, []);
     if (npc === "Emily") assert.match(block, /CANARY-123/);
     else assert.doesNotMatch(block, /CANARY-123/, npc);
   }
@@ -99,8 +99,8 @@ test("canary, 3 hops: even when every pass succeeds, a chain Emily-Haley-Gus-Sha
   assert.equal(knowers.Haley!.hops, 1);
   assert.equal(knowers.Gus!.hops, MAX_HOPS);
   assert.deepEqual(knowers.Gus!.source, { kind: "heard", from: "Haley" });
-  assert.doesNotMatch(knowledgeBlock("Shane", {}, town), /CANARY-123/);
-  assert.match(knowledgeBlock("Gus", {}, town), /CANARY-123.*heard from Haley/);
+  assert.doesNotMatch(knowledgeBlock("Shane", {}, town, []), /CANARY-123/);
+  assert.match(knowledgeBlock("Gus", {}, town, []), /CANARY-123.*heard from Haley/);
 });
 
 test("gossip moves one hop a night and shortens the text at each hop", () => {
@@ -162,13 +162,13 @@ test("a non-shareable fact never spreads in a 112-day seeded run, while shareabl
   const heard = town.facts.flatMap((f) => Object.values(f.knowers)).filter((k) => k.source.kind === "heard");
   assert.ok(heard.length > 20, `shareable facts spread (${heard.length} heard copies)`);
   assert.ok(heard.every((k) => k.hops >= 1 && k.hops <= MAX_HOPS));
-  for (const npc of CAST.filter((n) => n !== "Emily")) assert.doesNotMatch(knowledgeBlock(npc, {}, town), /CANARY-123/, npc);
+  for (const npc of CAST.filter((n) => n !== "Emily")) assert.doesNotMatch(knowledgeBlock(npc, {}, town, []), /CANARY-123/, npc);
   // Emily's prompt shows only her MAX_PROMPT_FACTS newest facts, so after 112 days of news the
   // confidence has aged out of her prompt. It is still in her state (checked above).
 });
 
 test("a confidence is labelled in the teller's own prompt so the model does not repeat it", () => {
-  assert.match(knowledgeBlock("Emily", {}, canaryTown(false)), /CANARY-123.*in confidence; do not repeat it/);
+  assert.match(knowledgeBlock("Emily", {}, canaryTown(false), []), /CANARY-123.*in confidence; do not repeat it/);
 });
 
 test("the same seed gives the same town; a repeated commit of the same night changes nothing", () => {
