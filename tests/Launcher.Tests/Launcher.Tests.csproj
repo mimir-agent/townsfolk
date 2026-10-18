@@ -13,6 +13,8 @@
   <ItemGroup>
     <Compile Include="../../mod/NodeLocator.cs" Link="NodeLocator.cs" />
     <Compile Include="../../mod/TalkWait.cs" Link="TalkWait.cs" />
+    <Compile Include="../../mod/BrainCheck.cs" Link="BrainCheck.cs" />
+    <Compile Include="../../mod/BrainClient.cs" Link="BrainClient.cs" />
   </ItemGroup>
 
   <ItemGroup>
