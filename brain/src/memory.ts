@@ -6,20 +6,25 @@
 // the game never saved is replaced by the next day-end, or discarded by a saved call for a
 // different date, so it is never remembered.
 //
-// Memory is tiered so it stays bounded however long the save runs:
+// A file holds one section per farmer the NPC has met or seen, keyed by farmerId (protocol.ts
+// FarmerRef; MAIN_FARMER for a request without one). Sections never mix: an event lands only in
+// the section of the farmer it happened with.
+//
+// Each section is tiered so it stays bounded however long the save runs:
 //   entries  the last MAX_ENTRIES days, raw
 //   seasons  one summary per season for the last MAX_SEASONS seasons, built from days
 //            that rolled out of entries
 //   years    one short summary of every season older than that
-// fitToBudget then guarantees the serialized file is at most MAX_FILE_BYTES.
+// fitToBudget then guarantees each section is at most sectionBudget(farmers) bytes and the
+// file at most fileBudget(farmers): 32 KB for one farmer, never over MAX_FILE_BYTES.
 //
 // The same commit also folds the day into the town state (<stateDir>/<saveId>/_town.json,
 // see town.ts): new facts, then the night's gossip.
 
-import { mkdir, readFile, rename, rm, writeFile } from "node:fs/promises";
+import { mkdir, readdir, readFile, rename, rm, writeFile } from "node:fs/promises";
 import { join } from "node:path";
-import type { DayEndRequest, DayEvent, DayRef, Season, VanillaReason } from "./protocol.ts";
-import { SEASONS } from "./protocol.ts";
+import type { DayEndRequest, DayEvent, DayRef, FarmerRef, Season, VanillaReason } from "./protocol.ts";
+import { MAIN_FARMER, SEASONS } from "./protocol.ts";
 import { seededRng, seedFrom } from "./rng.ts";
 import { emptyPlans, recordNight, type Night, type PlanState } from "./plan.ts";
 import { applyNight, emptyTown, type TownState } from "./town.ts";
@@ -30,15 +35,18 @@ export const MAX_ENTRY_TEXT = 1200;
 export const MAX_SEASON_SUMMARY = 700;
 export const MAX_SEASONS = 8;
 export const MAX_YEARS_SUMMARY = 1000;
-export const MAX_FILE_BYTES = 32 * 1024;
+export const MAX_SECTION_BYTES = 32 * 1024;
+export const MAX_FILE_BYTES = 64 * 1024;
 
 export type MemoryEntry = { day: DayRef; text: string };
 export type SeasonSummary = { season: Season; year: number; text: string };
 
-export type NpcMemory = {
-  version: 2;
-  npc: string;
-  // First day this NPC itself talked with or got a gift from the player. Witnessing does not count.
+// What one NPC remembers of one farmer.
+export type FarmerMemory = {
+  // The name the farmer had on the last committed day with them. Empty for a section carried
+  // over from a v2 file until a day with that farmer is committed.
+  farmerName: string;
+  // First day this NPC itself talked with or got a gift from this farmer. Witnessing does not count.
   firstMet: string | null;
   talks: number;
   gifts: number;
@@ -46,6 +54,15 @@ export type NpcMemory = {
   seasons: SeasonSummary[];
   entries: MemoryEntry[];
 };
+
+export type NpcMemory = {
+  version: 3;
+  npc: string;
+  farmers: Record<string, FarmerMemory>;
+};
+
+// The single-farmer format. Read and converted on load to farmers[MAIN_FARMER]; never written.
+export type NpcMemoryV2 = Omit<FarmerMemory, "farmerName"> & { version: 2; npc: string };
 
 // The file format the tonight slice wrote. Read and converted on load; never written.
 export type NpcMemoryV1 = {
@@ -62,7 +79,23 @@ export type Role = "participant" | "witness";
 export type Witnessed = { event: DayEvent; role: Role };
 
 export function emptyMemory(npc: string): NpcMemory {
-  return { version: 2, npc, firstMet: null, talks: 0, gifts: 0, years: "", seasons: [], entries: [] };
+  return { version: 3, npc, farmers: {} };
+}
+
+export function emptySection(farmerName: string): FarmerMemory {
+  return { farmerName, firstMet: null, talks: 0, gifts: 0, years: "", seasons: [], entries: [] };
+}
+
+// The memory section a request or event belongs to. One without farmerId is the main farmer's:
+// hostKey is MAIN_FARMER until a world request names the host, then the host's farmerId
+// (MemoryStore.hostKey).
+export function farmerKey(ref: FarmerRef, hostKey: string): string {
+  return ref.farmerId ?? hostKey;
+}
+
+// This NPC's section for one farmer; an empty one when the NPC has no history with them.
+export function sectionFor(mem: NpcMemory, key: string): FarmerMemory {
+  return mem.farmers[key] ?? emptySection("");
 }
 
 export function dateLabel(d: DayRef): string {
@@ -145,16 +178,16 @@ function appendBounded(summary: string, piece: string, max: number): string {
   return boundary === -1 ? cut : cut.slice(boundary + 1);
 }
 
-function foldOldestSeason(mem: NpcMemory): NpcMemory {
-  const [s, ...seasons] = mem.seasons;
-  if (s === undefined) return mem;
-  return { ...mem, seasons, years: appendBounded(mem.years, `${s.season} year ${s.year}: ${firstSentence(s.text)}`, MAX_YEARS_SUMMARY) };
+function foldOldestSeason(sec: FarmerMemory): FarmerMemory {
+  const [s, ...seasons] = sec.seasons;
+  if (s === undefined) return sec;
+  return { ...sec, seasons, years: appendBounded(sec.years, `${s.season} year ${s.year}: ${firstSentence(s.text)}`, MAX_YEARS_SUMMARY) };
 }
 
-function rollOldestEntry(mem: NpcMemory): NpcMemory {
-  const [old, ...entries] = mem.entries;
-  if (old === undefined) return mem;
-  const seasons = [...mem.seasons];
+function rollOldestEntry(sec: FarmerMemory): FarmerMemory {
+  const [old, ...entries] = sec.entries;
+  if (old === undefined) return sec;
+  const seasons = [...sec.seasons];
   const last = seasons.at(-1);
   const piece = `${old.day.day}: ${firstSentence(old.text)}`;
   if (last && last.season === old.day.season && last.year === old.day.year) {
@@ -162,48 +195,110 @@ function rollOldestEntry(mem: NpcMemory): NpcMemory {
   } else {
     seasons.push({ season: old.day.season, year: old.day.year, text: appendBounded("", piece, MAX_SEASON_SUMMARY) });
   }
-  let next: NpcMemory = { ...mem, seasons, entries };
+  let next: FarmerMemory = { ...sec, seasons, entries };
   while (next.seasons.length > MAX_SEASONS) next = foldOldestSeason(next);
   return next;
+}
+
+// One step of shrinking a section: roll its oldest raw day into its season summary, or fold its
+// oldest season into the years summary. Null when only the years summary is left.
+function shrink(sec: FarmerMemory): FarmerMemory | null {
+  if (sec.entries.length > 0) return rollOldestEntry(sec);
+  if (sec.seasons.length > 0) return foldOldestSeason(sec);
+  return null;
 }
 
 export function fileBytes(mem: NpcMemory): number {
   return Buffer.byteLength(JSON.stringify(mem, null, 2));
 }
 
-// The tier caps count characters and keep plain text near 24 KB. JSON escaping and multi-byte
-// characters make bytes exceed characters, so the ceiling is enforced here, in bytes. With no
-// entries and no seasons left the file is the years summary alone (at most 1000 chars), so the
-// loop always ends.
+// The bytes one section takes inside the file as written: its key, its body at the file's
+// indentation, and the separator.
+export function sectionBytes(mem: NpcMemory, key: string): number {
+  const sec = mem.farmers[key];
+  if (sec === undefined) return 0;
+  const body = JSON.stringify(sec, null, 2).replaceAll("\n", "\n    ");
+  return Buffer.byteLength(`    ${JSON.stringify(key)}: ${body},\n`);
+}
+
+// min(32 KB, 64 KB / farmers): single player keeps 32 KB, four farmers get 16 KB each.
+export function sectionBudget(farmers: number): number {
+  return Math.min(MAX_SECTION_BYTES, Math.floor(MAX_FILE_BYTES / Math.max(1, farmers)));
+}
+
+// The whole file: 32 KB with one farmer, as before multiplayer; 64 KB from two farmers on.
+export function fileBudget(farmers: number): number {
+  return Math.min(MAX_FILE_BYTES, Math.max(1, farmers) * MAX_SECTION_BYTES);
+}
+
+// The tier caps count characters and keep plain text near 24 KB per section. JSON escaping and
+// multi-byte characters make bytes exceed characters, so the ceilings are enforced here, in
+// bytes. First each section is brought under sectionBudget; then, while the whole file (its
+// header included) is over fileBudget, the largest section that can still shrink gives way.
+// A section with nothing left but its years summary is under 1.5 KB and a save has at most
+// MAX_FARMERS of them, so the file always fits before every section runs out of steps.
 export function fitToBudget(mem: NpcMemory): NpcMemory {
-  let m = mem;
-  while (fileBytes(m) > MAX_FILE_BYTES && (m.entries.length > 0 || m.seasons.length > 0)) {
-    m = m.entries.length > 0 ? rollOldestEntry(m) : foldOldestSeason(m);
+  const keys = Object.keys(mem.farmers);
+  const farmers = { ...mem.farmers };
+  const m: NpcMemory = { ...mem, farmers };
+  const perSection = sectionBudget(keys.length);
+  for (const key of keys) {
+    while (sectionBytes(m, key) > perSection) {
+      const next = shrink(farmers[key]!);
+      if (next === null) break;
+      farmers[key] = next;
+    }
+  }
+  const perFile = fileBudget(keys.length);
+  while (fileBytes(m) > perFile) {
+    const largest = keys
+      .filter((k) => farmers[k]!.entries.length > 0 || farmers[k]!.seasons.length > 0)
+      .sort((a, b) => sectionBytes(m, b) - sectionBytes(m, a))[0];
+    if (largest === undefined) break;
+    farmers[largest] = shrink(farmers[largest]!)!;
   }
   return m;
 }
 
-// Pure: folds one day's share of events for one NPC into that NPC's memory.
-export function applyDay(mem: NpcMemory, day: DayRef, share: Witnessed[], player: string): NpcMemory {
-  if (share.length === 0) return mem;
+// Pure: folds one day's share for one farmer into that farmer's section. `farmer` is the name
+// the lines use.
+function applySection(sec: FarmerMemory, day: DayRef, share: Witnessed[], farmer: string): FarmerMemory {
   const seen = new Set<string>();
   const lines: string[] = [];
   for (const { event, role } of share) {
-    const { key, line } = describe(event, role, player);
+    const { key, line } = describe(event, role, farmer);
     if (seen.has(key)) continue;
     seen.add(key);
     lines.push(line);
   }
   const own = share.filter((w) => w.role === "participant").map((w) => w.event);
-  let next: NpcMemory = {
-    ...mem,
-    firstMet: mem.firstMet ?? (own.length > 0 ? dateLabel(day) : null),
-    talks: mem.talks + own.filter((e) => e.type === "talk" || e.type === "chat").length,
-    gifts: mem.gifts + own.filter((e) => e.type === "gift").length,
-    entries: [...mem.entries, { day: { season: day.season, day: day.day, year: day.year }, text: cap(lines.join(" "), MAX_ENTRY_TEXT) }],
+  let next: FarmerMemory = {
+    ...sec,
+    farmerName: farmer,
+    firstMet: sec.firstMet ?? (own.length > 0 ? dateLabel(day) : null),
+    talks: sec.talks + own.filter((e) => e.type === "talk" || e.type === "chat").length,
+    gifts: sec.gifts + own.filter((e) => e.type === "gift").length,
+    entries: [...sec.entries, { day: { season: day.season, day: day.day, year: day.year }, text: cap(lines.join(" "), MAX_ENTRY_TEXT) }],
   };
   while (next.entries.length > MAX_ENTRIES) next = rollOldestEntry(next);
-  return fitToBudget(next);
+  return next;
+}
+
+// Pure: folds one day's share of events for one NPC into that NPC's memory. Each event lands in
+// the section of the farmer it happened with. An event without farmerId is the main farmer's:
+// it goes to hostKey (see farmerKey) and its lines use `player`, the day's playerName.
+export function applyDay(mem: NpcMemory, day: DayRef, share: Witnessed[], player: string, hostKey: string = MAIN_FARMER): NpcMemory {
+  if (share.length === 0) return mem;
+  const byFarmer = new Map<string, { name: string; list: Witnessed[] }>();
+  for (const w of share) {
+    const key = farmerKey(w.event, hostKey);
+    const group = byFarmer.get(key) ?? { name: w.event.farmerName ?? player, list: [] };
+    group.list.push(w);
+    byFarmer.set(key, group);
+  }
+  const farmers = { ...mem.farmers };
+  for (const [key, { name, list }] of byFarmer) farmers[key] = applySection(farmers[key] ?? emptySection(name), day, list, name);
+  return fitToBudget({ ...mem, farmers });
 }
 
 const V1_LABEL = /^(spring|summer|fall|winter) (\d{1,2}), year (\d+)$/;
@@ -215,15 +310,25 @@ export function migrateV1(old: NpcMemoryV1): NpcMemory {
     if (!m) throw new Error(`v1 memory for ${old.npc} has an unreadable date "${e.date}"`);
     return { day: { season: m[1] as Season, day: Number(m[2]), year: Number(m[3]) }, text: cap(e.text, MAX_ENTRY_TEXT) };
   });
-  return fitToBudget({
-    ...emptyMemory(old.npc),
+  const main: FarmerMemory = {
+    ...emptySection(""),
     firstMet: old.firstMet,
     talks: old.talks,
     gifts: old.gifts,
     years: appendBounded("", old.summary, MAX_YEARS_SUMMARY),
     entries,
-  });
+  };
+  return fitToBudget({ ...emptyMemory(old.npc), farmers: { [MAIN_FARMER]: main } });
 }
+
+// A v2 file is one farmer's memory, the single-player main farmer's: it becomes that section as is.
+export function migrateV2(old: NpcMemoryV2): NpcMemory {
+  const { version: _v, npc, ...section } = old;
+  return fitToBudget({ ...emptyMemory(npc), farmers: { [MAIN_FARMER]: { farmerName: "", ...section } } });
+}
+
+// Which farmerId a request without one stands for. Written once a world request names the host.
+type HostFile = { version: 1; hostFarmerId: string };
 
 export type PendingDay = Omit<DayEndRequest, "v">;
 export type CommitResult = { outcome: "committed" | "nothing-pending" | "stale-discarded"; committed: string[] };
@@ -316,15 +421,62 @@ export class MemoryStore {
   }
 
   async load(saveId: string, npc: string): Promise<NpcMemory> {
-    const raw = (await this.readJson(this.path(saveId, npc))) as NpcMemory | NpcMemoryV1 | null;
+    const raw = (await this.readJson(this.path(saveId, npc))) as NpcMemory | NpcMemoryV2 | NpcMemoryV1 | null;
     if (raw === null) return emptyMemory(npc);
-    if (raw.version === 2) return raw;
+    if (raw.version === 3) return raw;
+    if (raw.version === 2) return migrateV2(raw);
     if (raw.version === 1) return migrateV1(raw);
     throw new Error(`memory file for ${npc} has unknown version ${String((raw as { version: unknown }).version)}`);
   }
 
   async save(saveId: string, mem: NpcMemory): Promise<void> {
     await this.writeJson(saveId, this.path(saveId, mem.npc), mem);
+  }
+
+  private hostPath(saveId: string): string {
+    return join(this.dir, saveId, "_host.json");
+  }
+
+  // The section key for a request without farmerId: the host's farmerId once a world request
+  // has named it, MAIN_FARMER before. Kept in its own file, so a later world request without
+  // hostFarmerId does not split the host's history back into MAIN_FARMER.
+  async hostKey(saveId: string): Promise<string> {
+    const raw = (await this.readJson(this.hostPath(saveId))) as HostFile | null;
+    if (raw === null) return MAIN_FARMER;
+    if (raw.version !== 1) throw new Error(`host file for ${saveId} has unknown version ${String((raw as { version: unknown }).version)}`);
+    return raw.hostFarmerId;
+  }
+
+  // A world request named the host. Every NPC file's MAIN_FARMER section (single-player history,
+  // including files from before multiplayer) moves to hostId, and requests without farmerId use
+  // hostId from now on. Runs on every world request with a host and is a no-op once nothing is
+  // under MAIN_FARMER. An NPC that already has a hostId section keeps both sections as they
+  // are and is listed in `kept`: merging two histories is not something this slice decides.
+  setHost(saveId: string, hostId: string): Promise<{ moved: string[]; kept: string[] }> {
+    return this.serial(saveId, async () => {
+      const moved: string[] = [];
+      const kept: string[] = [];
+      let files: string[] = [];
+      try {
+        files = await readdir(join(this.dir, saveId));
+      } catch (err) {
+        if ((err as NodeJS.ErrnoException).code !== "ENOENT") throw err;
+      }
+      // NPC names start with a letter or digit (protocol.ts), so a _ file is never an NPC's.
+      for (const f of files.filter((x) => x.endsWith(".json") && !x.startsWith("_")).sort()) {
+        const mem = await this.load(saveId, f.slice(0, -".json".length));
+        const { [MAIN_FARMER]: main, ...others } = mem.farmers;
+        if (main === undefined) continue;
+        if (others[hostId] !== undefined) {
+          kept.push(mem.npc);
+          continue;
+        }
+        await this.save(saveId, { ...mem, farmers: { ...others, [hostId]: main } });
+        moved.push(mem.npc);
+      }
+      await this.writeJson(saveId, this.hostPath(saveId), { version: 1, hostFarmerId: hostId } satisfies HostFile);
+      return { moved, kept };
+    });
   }
 
   async pending(saveId: string): Promise<PendingDay | null> {
@@ -353,8 +505,9 @@ export class MemoryStore {
         return { outcome: "stale-discarded", committed: [] };
       }
       const share = shareByNpc(p.events);
+      const hostKey = await this.hostKey(saveId);
       for (const [npc, list] of share) {
-        await this.save(saveId, applyDay(await this.load(saveId, npc), p.day, list, p.playerName));
+        await this.save(saveId, applyDay(await this.load(saveId, npc), p.day, list, p.playerName, hostKey));
       }
       // The night's dice are seeded by save and date, so replaying a save replays its gossip.
       const rng = seededRng(seedFrom(`${saveId}:${dayKey(p.day)}`));

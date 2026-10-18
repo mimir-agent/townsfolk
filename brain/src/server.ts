@@ -69,7 +69,8 @@ export function createBrain(deps: BrainDeps): Server {
         const mem = await deps.store.load(body.saveId, body.npc);
         const town = await deps.store.loadTown(body.saveId);
         const ctx = todayFor(await deps.store.loadPlans(body.saveId), body.npc, body.day);
-        const reply = await talk(body, mem, town, ctx, deps.model, { deadlineMs: deps.talkDeadlineMs, log: deps.log });
+        const hostKey = await deps.store.hostKey(body.saveId);
+        const reply = await talk(body, mem, town, ctx, deps.model, { deadlineMs: deps.talkDeadlineMs, log: deps.log, hostKey });
         deps.log(`talk ${body.npc} ${reply.source} ${Date.now() - started}ms end=${reply.end} join=${reply.happening ? "offered" : "no"}`);
         return send(res, 200, reply);
       }
@@ -86,9 +87,14 @@ export function createBrain(deps: BrainDeps): Server {
         return send(res, 200, { v: 1, ok: true, outcome, committed });
       }
       if (req.method === "POST" && req.url === "/v1/world") {
-        const { v: _v, saveId, ...world } = parseWorld(await readJson(req));
+        const { v: _v, saveId, hostFarmerId, ...world } = parseWorld(await readJson(req));
         await deps.store.saveWorld(saveId, world);
         deps.log(`world ${saveId}: ${world.locations.length} locations, ${world.items.length} items, ${world.festivals.length} festivals`);
+        if (hostFarmerId !== undefined) {
+          const { moved, kept } = await deps.store.setHost(saveId, hostFarmerId);
+          if (moved.length > 0) deps.log(`world ${saveId}: host ${hostFarmerId}; moved single-player memory to the host for ${moved.join(", ")}`);
+          if (kept.length > 0) deps.log(`world ${saveId}: ${kept.join(", ")} already had a section for host ${hostFarmerId}; the single-player section was left as is`);
+        }
         return send(res, 200, { v: 1, ok: true });
       }
       if (req.method === "POST" && req.url === "/v1/plan") {
@@ -97,11 +103,13 @@ export function createBrain(deps: BrainDeps): Server {
         if (world === null) throw new NotReady(`no world snapshot for ${body.saveId}; POST /v1/world at save load first`);
         const stored = new Map<string, NpcMemory>();
         for (const npc of CAST) stored.set(npc, await deps.store.load(body.saveId, npc));
+        const hostKey = await deps.store.hostKey(body.saveId);
         const ctx = {
           world,
           town: await deps.store.loadTown(body.saveId),
-          memories: memoriesTonight(stored, await deps.store.pending(body.saveId), body.day),
+          memories: memoriesTonight(stored, await deps.store.pending(body.saveId), body.day, hostKey),
           state: await deps.store.loadPlans(body.saveId),
+          hostKey,
         };
         const { response, night } = await plan(body, ctx, deps.model, { deadlineMs: deps.planDeadlineMs, log: deps.log });
         if (night !== null) await deps.store.recordPlan(body.saveId, night);

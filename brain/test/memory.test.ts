@@ -1,12 +1,14 @@
 // Slice 1: witnessed memory, save-safe commit, tiered bounded memory.
+// Memory files are v3 (one section per farmer); every request here has no farmerId, so all of it
+// lands in the single-player section, MAIN_FARMER.
 
 import assert from "node:assert/strict";
 import { readdir, readFile, stat, writeFile, mkdir } from "node:fs/promises";
 import { join } from "node:path";
 import { test } from "node:test";
-import { applyDay, emptyMemory, fileBytes, MAX_ENTRIES, MAX_FILE_BYTES, shareByNpc, type NpcMemoryV1 } from "../src/memory.ts";
+import { applyDay, emptyMemory, fileBudget, fileBytes, MAX_ENTRIES, shareByNpc, type FarmerMemory, type NpcMemory, type NpcMemoryV1 } from "../src/memory.ts";
 import { DEFAULT_FAKE_REPLY, fakeAdapter } from "../src/model.ts";
-import { SEASONS, type DayEndRequest, type DayEvent, type DayRef, type GameDay } from "../src/protocol.ts";
+import { MAIN_FARMER, SEASONS, type DayEndRequest, type DayEvent, type DayRef, type GameDay } from "../src/protocol.ts";
 import { NO_CONTEXT, talk } from "../src/talk.ts";
 import { emptyTown } from "../src/town.ts";
 import { talkReq, tempStore, withServer } from "./helpers.ts";
@@ -14,6 +16,12 @@ import { talkReq, tempStore, withServer } from "./helpers.ts";
 const SAVE = "Farm_123";
 const spring5: GameDay = { season: "spring", day: 5, year: 1, time: 2400, weather: "sunny", location: "FarmHouse" };
 const ref = (d: GameDay): DayRef => ({ season: d.season, day: d.day, year: d.year });
+// The single-player section of an NPC's memory.
+const main = (m: NpcMemory): FarmerMemory => {
+  const sec = m.farmers[MAIN_FARMER];
+  assert.ok(sec, `${m.npc} has a ${MAIN_FARMER} section`);
+  return sec;
+};
 
 function dayEnd(d: GameDay, events: DayEvent[]): DayEndRequest {
   return { v: 1, saveId: SAVE, playerName: "Tae", day: d, events };
@@ -63,8 +71,8 @@ test("done-when 1: Pierre witnesses a gift to Emily, Shane is elsewhere; after s
 
     // Witnessing is not meeting: Pierre has not spoken with the player yet.
     const pierreMem = await c.store.load(SAVE, "Pierre");
-    assert.equal(pierreMem.firstMet, null);
-    assert.equal(pierreMem.gifts, 0);
+    assert.equal(main(pierreMem).firstMet, null);
+    assert.equal(main(pierreMem).gifts, 0);
     const model = fakeAdapter([DEFAULT_FAKE_REPLY]);
     await talk(talkReq({ npc: "Pierre" }), pierreMem, emptyTown(), NO_CONTEXT, model, { deadlineMs: 5000, log: () => {} });
     assert.match(model.calls[0]!.user, /never spoken with Tae/);
@@ -84,15 +92,15 @@ test("done-when 2: a day-end with no saved, then a new day-end for the same date
     assert.deepEqual(saved.json.committed, ["Abigail"]);
 
     const abigail = await c.store.load(SAVE, "Abigail");
-    assert.equal(abigail.entries.length, 1);
-    assert.equal(abigail.talks, 1);
-    assert.match(abigail.entries[0]!.text, /REPLAYED-LINE/);
+    assert.equal(main(abigail).entries.length, 1);
+    assert.equal(main(abigail).talks, 1);
+    assert.match(main(abigail).entries[0]!.text, /REPLAYED-LINE/);
     assert.doesNotMatch(JSON.stringify(abigail), /UNSAVED-LINE/);
 
     // A second saved for the same day finds nothing pending and changes nothing.
     const again = await c.post("/v1/saved", { v: 1, saveId: SAVE, day: ref(spring5) });
     assert.equal(again.json.outcome, "nothing-pending");
-    assert.equal((await c.store.load(SAVE, "Abigail")).entries.length, 1);
+    assert.equal(main(await c.store.load(SAVE, "Abigail")).entries.length, 1);
   });
 });
 
@@ -110,6 +118,8 @@ test("done-when 3: 224 committed days for one NPC; the file never exceeds 32 KB 
   const store = await tempStore();
   const seasonsSeen = new Set<string>();
   let maxBytes = 0;
+  // One farmer: the single-player budget, 32 KB, as before multiplayer.
+  assert.equal(fileBudget(1), 32 * 1024);
   for (let i = 0; i < 224; i++) {
     const season = SEASONS[Math.floor(i / 28) % 4]!;
     const year = 1 + Math.floor(i / 112);
@@ -127,9 +137,9 @@ test("done-when 3: 224 committed days for one NPC; the file never exceeds 32 KB 
     assert.equal(r.outcome, "committed");
     const bytes = (await stat(join(store.dir, SAVE, "Lewis.json"))).size;
     maxBytes = Math.max(maxBytes, bytes);
-    assert.ok(bytes <= MAX_FILE_BYTES, `day ${i}: Lewis.json is ${bytes} bytes`);
+    assert.ok(bytes <= fileBudget(1), `day ${i}: Lewis.json is ${bytes} bytes`);
   }
-  const mem = await store.load(SAVE, "Lewis");
+  const mem = main(await store.load(SAVE, "Lewis"));
   // These days are heavy and two-byte, so the byte guard rolls a raw day or two early.
   assert.ok(mem.entries.length >= MAX_ENTRIES - 3 && mem.entries.length <= MAX_ENTRIES, `entries ${mem.entries.length}`);
   assert.equal(mem.talks, 224 * 3);
@@ -150,21 +160,22 @@ test("memory tiers: days roll into season summaries, the oldest seasons fold int
     const d: DayRef = { season: SEASONS[Math.floor(i / 28) % 4]!, day: (i % 28) + 1, year: 1 + Math.floor(i / 112) };
     mem = applyDay(mem, d, [{ event: { type: "talk", npc: "Gus", location: "Saloon", time: 1900, witnesses: [], npcLine: `Night ${i}.` }, role: "participant" }], "Tae");
   }
-  assert.equal(mem.entries.length, MAX_ENTRIES);
+  const sec = main(mem);
+  assert.equal(sec.entries.length, MAX_ENTRIES);
   // Three years: the last 8 seasons keep their own summary, year 1 lives in the years summary.
-  assert.deepEqual(mem.seasons.map((s) => `${s.season} ${s.year}`), [
+  assert.deepEqual(sec.seasons.map((s) => `${s.season} ${s.year}`), [
     "spring 2", "summer 2", "fall 2", "winter 2", "spring 3", "summer 3", "fall 3", "winter 3",
   ]);
-  for (const s of SEASONS) assert.match(mem.years, new RegExp(`${s} year 1:`));
-  assert.ok(mem.years.length <= 1000);
-  assert.ok(fileBytes(mem) < MAX_FILE_BYTES);
+  for (const s of SEASONS) assert.match(sec.years, new RegExp(`${s} year 1:`));
+  assert.ok(sec.years.length <= 1000);
+  assert.ok(fileBytes(mem) < fileBudget(1));
 });
 
 test("a witness who saw several turns of one conversation remembers it once", () => {
   const turns: DayEvent[] = [1000, 1001, 1002].map((time) => ({ type: "talk", npc: "Haley", location: "Town", time, witnesses: ["Emily"], npcLine: `turn ${time}` }));
   const share = shareByNpc(turns);
   assert.equal(share.get("Haley")!.length, 3);
-  const emily = applyDay(emptyMemory("Emily"), { season: "spring", day: 1, year: 1 }, share.get("Emily")!, "Tae");
+  const emily = main(applyDay(emptyMemory("Emily"), { season: "spring", day: 1, year: 1 }, share.get("Emily")!, "Tae"));
   assert.equal(emily.entries[0]!.text.match(/I saw Tae talking with Haley/g)!.length, 1);
   assert.doesNotMatch(emily.entries[0]!.text, /turn 1000/);
 });
@@ -183,14 +194,14 @@ test("a v1 memory file from the tonight slice is read and kept", async () => {
   await mkdir(join(store.dir, SAVE), { recursive: true });
   await writeFile(join(store.dir, SAVE, "Abigail.json"), JSON.stringify(v1));
   const mem = await store.load(SAVE, "Abigail");
-  assert.equal(mem.version, 2);
-  assert.equal(mem.talks, 2);
-  assert.deepEqual(mem.entries[0]!.day, { season: "spring", day: 3, year: 1 });
-  assert.match(mem.years, /OLD-SUMMARY/);
+  assert.equal(mem.version, 3);
+  assert.equal(main(mem).talks, 2);
+  assert.deepEqual(main(mem).entries[0]!.day, { season: "spring", day: 3, year: 1 });
+  assert.match(main(mem).years, /OLD-SUMMARY/);
 
   await store.stage(dayEnd(spring5, [giftToEmily, { type: "talk", npc: "Abigail", location: "Town", time: 1000, witnesses: [], npcLine: "NEW" }]));
   await store.commit(SAVE, ref(spring5));
-  const after = await store.load(SAVE, "Abigail");
+  const after = main(await store.load(SAVE, "Abigail"));
   assert.equal(after.entries.length, 2);
   assert.equal(after.talks, 3);
   assert.deepEqual((await readdir(join(store.dir, SAVE))).sort(), ["Abigail.json", "Emily.json", "Pierre.json", "_town.json"]);
@@ -202,10 +213,10 @@ test("a vanilla chat (the game's own dialogue) is remembered as a meeting, count
     assert.equal((await c.post("/v1/day-end", dayEnd(spring5, [met]))).status, 200);
     assert.equal((await c.post("/v1/saved", { v: 1, saveId: SAVE, day: ref(spring5) })).json.outcome, "committed");
     const shane = await c.store.load(SAVE, "Shane");
-    assert.equal(shane.firstMet, "spring 5, year 1");
-    assert.equal(shane.talks, 1);
-    assert.match(shane.entries[0]!.text, /Tae and I met for the first time at AnimalShop, 9:00am/);
-    const marnie = await c.store.load(SAVE, "Marnie");
+    assert.equal(main(shane).firstMet, "spring 5, year 1");
+    assert.equal(main(shane).talks, 1);
+    assert.match(main(shane).entries[0]!.text, /Tae and I met for the first time at AnimalShop, 9:00am/);
+    const marnie = main(await c.store.load(SAVE, "Marnie"));
     assert.match(marnie.entries[0]!.text, /I saw Tae talking with Shane at AnimalShop/);
     assert.equal(marnie.firstMet, null);
     // The next talk prompt no longer treats the farmer as a stranger.
