@@ -2,6 +2,7 @@ using System;
 using System.Collections.Generic;
 using System.Linq;
 using System.Text.RegularExpressions;
+using System.Threading;
 using System.Threading.Tasks;
 using Microsoft.Xna.Framework;
 using StardewModdingAPI;
@@ -131,7 +132,7 @@ public sealed class ModEntry : Mod
         npc.faceTowardFarmerForPeriod(6000, 4, false, Game1.player);
         npc.doEmote(Character.pauseEmote);
         this.convo = new Conversation(npc);
-        this.convo.Pending = this.brain.Talk(this.BuildTalk(npc, this.convo, null));
+        this.convo.Ask(this.brain.Talk(this.BuildTalk(npc, this.convo, null)));
     }
 
     // What VanillaFirst needs, read from the game. Reading CurrentDialogue loads today's
@@ -201,10 +202,15 @@ public sealed class ModEntry : Mod
         this.CheckGift();
         this.planner?.OnUpdateTicked();
 
-        if (this.convo?.Pending is not { IsCompleted: true } done)
+        if (this.convo?.Pending is not { } done)
             return;
 
         Conversation c = this.convo;
+        // A reply that has not come within the talk timeout is given up on here, on the game
+        // thread, whatever state the request is in. Its late answer, if any, is never shown.
+        bool overdue = !done.IsCompleted && TalkWait.Overdue(c.AskedAtMs, Environment.TickCount64, this.config.TimeoutSeconds);
+        if (!done.IsCompleted && !overdue)
+            return;
 
         // The player left the map or a cutscene started while we waited: drop the reply quietly.
         if (!Context.IsWorldReady || Game1.eventUp || Game1.currentLocation != c.Location)
@@ -219,6 +225,13 @@ public sealed class ModEntry : Mod
 
         c.Pending = null;
         TalkResponse? reply = done.Status == TaskStatus.RanToCompletion ? done.Result : null;
+        // The request state and thread pool numbers are here to find why the first talk after
+        // a load hung in the 436a094 smoke test; HttpClient's own timeout never fired then.
+        if (overdue)
+            this.Monitor.Log(
+                $"No reply from the brain for {c.Npc.Name} in {this.config.TimeoutSeconds}s (request {done.Status}, " +
+                $"thread pool {ThreadPool.ThreadCount} threads, {ThreadPool.PendingWorkItemCount} queued).",
+                LogLevel.Warn);
 
         // Brain down, slow, or out of good answers on the opening turn: the NPC says their normal line.
         if (c.Turns == 0 && (reply is null || reply.Source == "fallback"))
@@ -272,7 +285,7 @@ public sealed class ModEntry : Mod
         TalkRequest req = this.BuildTalk(c.Npc, c, said);
         c.Transcript.Add(new TranscriptLine("player", picked.Text));
         c.Npc.doEmote(Character.pauseEmote);
-        c.Pending = this.brain.Talk(req);
+        c.Ask(this.brain.Talk(req));
     }
 
     // The game applies the gift a tick or so after the click; watch for up to one second.
@@ -475,6 +488,14 @@ public sealed class ModEntry : Mod
         public int Turns { get; set; }
         public List<TranscriptLine> Transcript { get; } = new();
         public Task<TalkResponse?>? Pending { get; set; }
+        // When Pending was asked for, from Environment.TickCount64.
+        public long AskedAtMs { get; private set; }
+
+        public void Ask(Task<TalkResponse?> reply)
+        {
+            this.Pending = reply;
+            this.AskedAtMs = Environment.TickCount64;
+        }
     }
 
     private sealed record PendingGift(NPC Npc, Item Item, int GiftsBefore)
