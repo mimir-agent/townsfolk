@@ -1,7 +1,8 @@
 // The plan validator. Authoritative: every part of a model-written plan is checked here against
 // the world snapshot the bridge sent at save load (POST /v1/world), and anything that fails is
 // dropped on its own with a reason. One bad part never costs the rest of the plan.
-// The bridge later re-checks only what needs the live game (is the tile passable).
+// The bridge later re-checks only what needs the live game (the walking route, and the tile,
+// which it moves to the nearest one an NPC can stand on).
 //
 // Pure functions, no I/O. plan.ts decides the order: schedules first (with the repeat regen),
 // then the happening against the schedules that survived, then quest, friendship, relationships.
