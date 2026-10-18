@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using System.Linq;
 using System.Net.Http;
 using System.Text;
 using System.Text.Json;
@@ -47,7 +48,9 @@ public sealed record TalkRequest(
     List<TranscriptLine> Transcript,
     GameStats Stats,
     bool? Joined,
-    List<string> EventsSeen)
+    List<string> EventsSeen,
+    string? FarmerId = null,
+    string? FarmerName = null)
 {
     public int V { get; init; } = BrainClient.ProtocolVersion;
 }
@@ -70,7 +73,9 @@ public sealed record DayEvent(
     string? Taste = null,
     TalkFact? Fact = null,
     string? Topic = null,
-    string? Reason = null);
+    string? Reason = null,
+    string? FarmerId = null,
+    string? FarmerName = null);
 
 /// <summary>NPCs seen on the same map at the same time today. Gossip passes between them overnight.</summary>
 public sealed record Together(string Location, List<string> Npcs);
@@ -90,13 +95,18 @@ public sealed record WorldItem(string Id, string Name);
 public sealed record WorldFestival(string Season, int Day, string Name);
 
 /// <summary>Sent at save load: what the brain's plan validator checks every plan against.</summary>
-public sealed record WorldRequest(string SaveId, List<WorldLocation> Locations, List<WorldItem> Items, List<WorldFestival> Festivals, List<string> Married)
+/// <summary>HostFarmerId: the host's farmerId; the brain moves any "main" memory section under it.</summary>
+public sealed record WorldRequest(string SaveId, List<WorldLocation> Locations, List<WorldItem> Items, List<WorldFestival> Festivals, List<string> Married, string? HostFarmerId = null)
 {
     public int V { get; init; } = BrainClient.ProtocolVersion;
 }
 
 /// <summary>Asks for the plan for Day, the day about to start.</summary>
-public sealed record PlanRequest(string SaveId, string PlayerName, DayRef Day, GameStats Stats, List<string> EventsSeen)
+/// <summary>A farmer the plan may address, with their hearts per NPC (0..14).</summary>
+public sealed record PlanFarmer(string FarmerId, string FarmerName, Dictionary<string, int> Hearts);
+
+/// <summary>Farmers: every farmer the bridge can deliver plan parts to; a shift for anyone else is dropped by the brain.</summary>
+public sealed record PlanRequest(string SaveId, string PlayerName, DayRef Day, GameStats Stats, List<string> EventsSeen, List<PlanFarmer>? Farmers = null)
 {
     public int V { get; init; } = BrainClient.ProtocolVersion;
 }
@@ -104,8 +114,9 @@ public sealed record PlanRequest(string SaveId, string PlayerName, DayRef Day, G
 /// <summary>Sets off at Time for tile (X, Y) of Location, facing 0 up, 1 right, 2 down, 3 left.</summary>
 public sealed record PlanStop(int Time, string Location, int X, int Y, int Facing);
 public sealed record PlannedSchedule(string Npc, List<PlanStop> Stops);
-public sealed record MailQuest(string Id, string Item, string From, int Reward, string Text);
-public sealed record FriendshipShift(string Npc, int Delta, string Reason);
+/// <summary>FarmerId on a quest or shift: the farmer it is for. Absent means the host.</summary>
+public sealed record MailQuest(string Id, string Item, string From, int Reward, string Text, string? FarmerId = null);
+public sealed record FriendshipShift(string Npc, int Delta, string Reason, string? FarmerId = null);
 public sealed record DroppedPart(string Part, string Reason);
 
 /// <summary>
@@ -121,7 +132,13 @@ public sealed record PlanResponse(
     List<FriendshipShift> Friendship,
     List<DroppedPart> Dropped);
 
-/// <summary>HTTP client for the brain. Every method returns null or false on failure and never throws.</summary>
+/// <summary>
+/// HTTP client for the brain. Every method returns null or false on failure and never throws.
+/// Only the host computer may call it (spec-v2 section 3): talk from ModEntry.AskTalk behind
+/// Context.IsOnHostComputer, a farmhand's talk from HostRelay on the main player's tick, and
+/// day-end, saved, world and plan behind Context.IsMainPlayer. A farmhand's game builds this
+/// client but never sends a request with it.
+/// </summary>
 public sealed class BrainClient
 {
     public const int ProtocolVersion = 1;
@@ -155,7 +172,7 @@ public sealed class BrainClient
                 return null;
             TalkResponse? res = JsonSerializer.Deserialize<TalkResponse>(body, Json);
             // A brain that answers in another protocol version is treated as down.
-            if (res is null || res.V != ProtocolVersion || string.IsNullOrWhiteSpace(res.Line) || res.Choices is null)
+            if (res is null || !IsUsable(res))
             {
                 this.log($"brain /v1/talk returned an unusable body: {Truncate(body)}");
                 return null;
@@ -168,6 +185,10 @@ public sealed class BrainClient
             return null;
         }
     }
+
+    /// <summary>A reply the bridge can show. Also checks a reply relayed by the host, which a farmhand cannot trust blindly.</summary>
+    public static bool IsUsable(TalkResponse res) =>
+        res.V == ProtocolVersion && !string.IsNullOrWhiteSpace(res.Line) && res.Choices is not null && res.Choices.All(c => c is not null && c.Id is not null && c.Text is not null);
 
     public Task<bool> DayEnd(DayEndRequest req) => this.PostOk("v1/day-end", req);
 
