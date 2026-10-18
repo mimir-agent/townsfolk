@@ -4,7 +4,7 @@
 
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { applyDay, emptyMemory, fileBudget, fileBytes, sectionFor, shareByNpc, type NpcMemory } from "../src/memory.ts";
+import { applyDay, emptyMemory, fileBudget, fileBytes, MAX_ENTRIES, PRIVATE_MARK, sectionFor, shareByNpc, type NpcMemory } from "../src/memory.ts";
 import { DEFAULT_FAKE_REPLY, fakeAdapter } from "../src/model.ts";
 import { MAIN_FARMER, SEASONS, type DayEvent, type DayRef, type GameDay, type SceneEvent } from "../src/protocol.ts";
 import { isPrivateScene, sceneLine } from "../src/scenes.ts";
@@ -141,17 +141,28 @@ test("done-when 4: farmer B's talk prompt for Shane does not show A's private sc
     await c.post("/v1/day-end", dayEnd(d, [scene(PRIVATE_ID, ["Shane", "Marnie"])]));
     await c.post("/v1/saved", { v: 1, saveId: SAVE, day: ref(d) });
     const aLine = entriesText(await c.store.load(SAVE, "Shane"), A.farmerId);
-    assert.match(aLine, /\(private; I keep this to myself\)$/);
+    assert.ok(aLine.startsWith(`${PRIVATE_MARK} `), aLine);
 
     await c.post("/v1/talk", talkReq({ npc: "Shane", ...B, playerName: "Bea", day: { ...dayAt(5), time: 1100 } }));
     const forB = model.calls.at(-1)!.user;
     assert.doesNotMatch(forB, /about you/);
     assert.ok(!forB.includes(aLine), "A's scene line is not in B's prompt");
-    assert.doesNotMatch(forB, /private; I keep this/);
+    assert.ok(!forB.includes(PRIVATE_MARK));
 
     await c.post("/v1/talk", talkReq({ npc: "Shane", ...A, playerName: "Ash", day: { ...dayAt(5), time: 1200 } }));
     assert.ok(model.calls.at(-1)!.user.includes(aLine), "A's own prompt for Shane has it");
   });
+});
+
+test("a private scene keeps its mark after its day rolls out of the raw entries into the season summary", () => {
+  let mem = emptyMemory("Shane");
+  const e = scene(PRIVATE_ID, ["Shane", "Marnie"]);
+  mem = applyDay(mem, ref(dayAt(0)), shareByNpc([e]).get("Shane")!, "Ash");
+  const talk: DayEvent = { type: "talk", ...A, npc: "Shane", location: "Town", time: 1000, witnesses: [], npcLine: "Hey." };
+  for (let n = 1; n <= MAX_ENTRIES; n++) mem = applyDay(mem, ref(dayAt(n)), shareByNpc([talk]).get("Shane")!, "Ash");
+  const sec = sectionFor(mem, A.farmerId);
+  assert.ok(!sec.entries.some((x) => x.text.includes(PRIVATE_MARK)), "the scene day has rolled out of entries");
+  assert.ok(sec.seasons[0]!.text.startsWith(`1: ${PRIVATE_MARK}`), sec.seasons[0]!.text);
 });
 
 test("a heard scene fact about farmer A reads 'about Ash' in Emily's prompt for B and 'about you' for A", async () => {

@@ -76,6 +76,9 @@ export type NpcMemoryV1 = {
   entries: { date: string; text: string }[];
 };
 
+// Leads a private scene's line in an actor's memory (scenes.ts PRIVATE_SCENES).
+export const PRIVATE_MARK = "(Private, I keep this to myself)";
+
 export type Role = "participant" | "witness";
 export type Witnessed = { event: DayEvent; role: Role };
 
@@ -125,7 +128,9 @@ function describe(e: DayEvent, role: Role, player: string, npc: string, festival
   // Every actor in a scene took part in it, and each tells it from its own side.
   if (e.type === "scene") {
     const line = sceneLine(e, npc, player, festival);
-    return { key: `s:${e.eventId}`, line: isPrivateScene(e.eventId) ? `${line} (private; I keep this to myself)` : line };
+    // The mark leads the line, so it survives when the day is cut to its first sentence for the
+    // season summary.
+    return { key: `s:${e.eventId}`, line: isPrivateScene(e.eventId) ? `${PRIVATE_MARK} ${line}` : line };
   }
   // Everyone in a happening was part of it, so the one the player spoke to and the others
   // remember the join the same way.
