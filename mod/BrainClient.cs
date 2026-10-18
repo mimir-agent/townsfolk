@@ -46,7 +46,8 @@ public sealed record TalkRequest(
     Choice? RecentChoice,
     List<TranscriptLine> Transcript,
     GameStats Stats,
-    bool? Joined)
+    bool? Joined,
+    List<string> EventsSeen)
 {
     public int V { get; init; } = BrainClient.ProtocolVersion;
 }
@@ -68,7 +69,8 @@ public sealed record DayEvent(
     string? Item = null,
     string? Taste = null,
     TalkFact? Fact = null,
-    string? Topic = null);
+    string? Topic = null,
+    string? Reason = null);
 
 /// <summary>NPCs seen on the same map at the same time today. Gossip passes between them overnight.</summary>
 public sealed record Together(string Location, List<string> Npcs);
@@ -94,7 +96,7 @@ public sealed record WorldRequest(string SaveId, List<WorldLocation> Locations, 
 }
 
 /// <summary>Asks for the plan for Day, the day about to start.</summary>
-public sealed record PlanRequest(string SaveId, string PlayerName, DayRef Day, GameStats Stats)
+public sealed record PlanRequest(string SaveId, string PlayerName, DayRef Day, GameStats Stats, List<string> EventsSeen)
 {
     public int V { get; init; } = BrainClient.ProtocolVersion;
 }
