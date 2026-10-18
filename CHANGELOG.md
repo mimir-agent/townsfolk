@@ -2,6 +2,16 @@
 
 One version number covers the whole release: `mod/manifest.json`, `mod/Townsfolk.csproj` and `brain/package.json` must match, and each release has a heading here. `npm run release` (in `brain/`) refuses to build otherwise. The release merge is tagged `vX.Y.Z`.
 
+## 0.1.3
+
+Faster chat replies. The talk prompt is unchanged: the same card, memory, gossip and transcript.
+
+- Talk no longer loads the Claude account's claude.ai connectors. Even with no tools, `claude -p` loaded every connected MCP server into each call (on the dev Mac about 54,000 extra input tokens a call). Talk and the plan now run with `--strict-mcp-config` and no MCP config.
+- Talk no longer thinks before it answers. Haiku spent 400 to 1,300 tokens thinking on about half of the turns, 3 to 5 extra seconds each. The talk process now starts with `CLAUDE_CODE_EFFORT_LEVEL=low`, `CLAUDE_CODE_DISABLE_THINKING=1` and `CLAUDE_CODE_DISABLE_ADAPTIVE_THINKING=1`. The overnight plan (Sonnet) keeps its thinking. Haiku still thinks on some turns despite all three; see the measurements in the PR.
+- The NPC's line shows before the choices are ready. On the host the waiting box shows the line as soon as it is written, with the dots under it, and the choices follow (about half a second to a second later). A farmhand's talk still arrives whole.
+- Every talk logs its phases in the brain window: `talk <npc> attempt N: queue, first token, line, done` in ms, with input, cache and output tokens (and thinking tokens).
+- `node scripts/talk-bench.ts` and `node scripts/talk-e2e.ts` (in `brain/`) measure talk speed with the real `claude` CLI. They are manual and spend real model calls; `npm test` does not run them.
+
 ## 0.1.2
 
 Every chat fell back to the game's own line within a fraction of a second on the host's Mac, and nothing said why. The fast ways a talk fails (Claude Code not found, not logged in, exiting with an error, a reply that is not JSON or breaks a rule) all end in a canned fallback within about 5 to 55 ms, so the waiting box opened and closed at once. This release makes each of them visible.
