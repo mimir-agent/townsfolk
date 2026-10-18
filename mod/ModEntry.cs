@@ -47,6 +47,7 @@ public sealed class ModEntry : Mod
     private BrainClient brain = null!;
     private HostRelay relay = null!;
     private Planner? planner;
+    private SceneWatcher scenes = null!;
     // One per split-screen player: their conversation, gift, talk delta, join and chats today.
     private readonly PerScreen<ScreenState> screens = new(() => new ScreenState());
 
@@ -72,6 +73,7 @@ public sealed class ModEntry : Mod
         this.planner = this.config.Planning ? new Planner(helper, this.Monitor, this.brain, this.Route) : null;
         this.relay = new HostRelay(helper, this.Monitor, this.brain, this.ModManifest.UniqueID, this.ModManifest.Version.ToString(),
             this.config.TimeoutSeconds, this.IsEnabled, this.AddEvent, this.OnFarmerApply);
+        this.scenes = new SceneWatcher(this.Monitor, this.AddOwnEvent);
         helper.Events.Input.ButtonPressed += this.OnButtonPressed;
         helper.Events.GameLoop.UpdateTicked += this.OnUpdateTicked;
         helper.Events.GameLoop.TimeChanged += (_, _) => this.SampleTogether();
@@ -96,6 +98,7 @@ public sealed class ModEntry : Mod
     private void Reset()
     {
         this.screens.Value = new ScreenState();
+        this.scenes.Reset();
         if (!OwnsSharedState)
             return;
         this.todaysEvents.Clear();
@@ -256,6 +259,7 @@ public sealed class ModEntry : Mod
     private void OnUpdateTicked(object? sender, UpdateTickedEventArgs e)
     {
         this.relay.OnUpdateTicked();
+        this.scenes.OnUpdateTicked();
         this.CheckGift();
         this.planner?.OnUpdateTicked();
 
@@ -436,6 +440,8 @@ public sealed class ModEntry : Mod
     private void OnDayEnding(object? sender, DayEndingEventArgs e)
     {
         this.screens.Value = new ScreenState();
+        // Before the day's events are copied below, so a scene still up at day end is in them.
+        this.scenes.OnDayEnding();
         if (!Context.IsMainPlayer)
             return;
         GameDay today = Today(Game1.player);

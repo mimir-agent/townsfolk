@@ -32,8 +32,22 @@ public class RelayRulesTests
         Assert.Equal(new[] { "Sam" }, c.Witnesses);
     }
 
+    [Fact]
+    public void A_scene_needs_a_protocol_event_id_and_the_festival_flag()
+    {
+        var scene = new DayEvent("scene", "Shane", "AnimalShop", 1200, new List<string> { "Marnie", "Shane", "NUL" }, EventId: "3910974", Festival: false);
+        DayEvent? c = Clean(scene);
+        Assert.NotNull(c);
+        Assert.Equal(new[] { "Marnie" }, c!.Witnesses);
+        // Not a voiced check: every villager actor remembers a scene, voiced or not.
+        Assert.NotNull(Clean(scene with { Npc = "Krobus" }));
+        Assert.Null(Clean(scene with { EventId = null }));
+        Assert.Null(Clean(scene with { EventId = "a/b" }));
+        Assert.Null(Clean(scene with { EventId = new string('1', 61) }));
+        Assert.Null(Clean(scene with { Festival = null }));
+    }
+
     [Theory]
-    [InlineData("scene")]
     [InlineData("hack")]
     [InlineData("")]
     public void An_event_type_the_day_end_protocol_does_not_know_is_dropped(string type) =>

@@ -75,7 +75,9 @@ public sealed record DayEvent(
     string? Topic = null,
     string? Reason = null,
     string? FarmerId = null,
-    string? FarmerName = null);
+    string? FarmerName = null,
+    string? EventId = null,
+    bool? Festival = null);
 
 /// <summary>NPCs seen on the same map at the same time today. Gossip passes between them overnight.</summary>
 public sealed record Together(string Location, List<string> Npcs);
