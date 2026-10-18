@@ -89,7 +89,7 @@ public sealed class ModEntry : Mod
     }
 
     private bool IsEnabled(NPC npc) =>
-        npc.IsVillager && npc.CanSocialize && (this.config.AllNpcs || this.config.EnabledNpcs.Contains(npc.Name));
+        npc.IsVillager && npc.CanSocialize && Voiced.Allows(npc.Name, this.config.Voiced, this.config.AllNpcs, this.config.EnabledNpcs);
 
     private void OnButtonPressed(object? sender, ButtonPressedEventArgs e)
     {
@@ -97,7 +97,7 @@ public sealed class ModEntry : Mod
             return;
 
         NPC? npc = FindNpcNear(e.Cursor.GrabTile);
-        if (npc is null || !this.IsEnabled(npc))
+        if (npc is null || !this.IsEnabled(npc) || CounterGuard.IsCounterClick(Game1.currentLocation, e.Cursor.GrabTile))
             return;
 
         // Holding an object means the player is giving a gift: let vanilla handle it and watch the result.
