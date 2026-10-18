@@ -101,7 +101,7 @@ public sealed class Planner
     /// Save loaded (screen 0): load this save's mailed quests, on every computer, since each
     /// farmer's own game serves its quests. The main player also sends the world snapshot.
     /// </summary>
-    public void OnSaveLoaded()
+    public void OnSaveLoaded(Task brainReady)
     {
         this.Reset();
         this.archive = this.helper.Data.ReadJsonFile<QuestArchive>(this.ArchivePath) ?? new QuestArchive();
@@ -113,7 +113,7 @@ public sealed class Planner
         WorldRequest world = ReadWorld();
         int locations = world.Locations.Count, items = world.Items.Count;
         // Fire and forget. If it fails, every plan request answers 409 and every day runs vanilla.
-        _ = this.brain.World(world).ContinueWith(t =>
+        _ = brainReady.ContinueWith(_ => this.brain.World(world), TaskScheduler.Default).Unwrap().ContinueWith(t =>
         {
             if (t.Result)
                 this.monitor.Log($"Sent the world to the brain: {locations} locations, {items} quest items.", LogLevel.Debug);

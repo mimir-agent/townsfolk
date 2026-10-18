@@ -10,6 +10,7 @@ using StardewModdingAPI;
 using StardewModdingAPI.Events;
 using StardewModdingAPI.Utilities;
 using StardewValley;
+using StardewValley.Menus;
 
 namespace Townsfolk;
 
@@ -45,6 +46,7 @@ public sealed class ModEntry : Mod
 
     private ModConfig config = new();
     private BrainClient brain = null!;
+    private BrainLauncher? launcher;
     private HostRelay relay = null!;
     private Planner? planner;
     private SceneWatcher scenes = null!;
@@ -68,6 +70,7 @@ public sealed class ModEntry : Mod
     public override void Entry(IModHelper helper)
     {
         this.config = helper.ReadConfig<ModConfig>();
+        this.launcher = this.config.StartBrain ? new BrainLauncher(this.Monitor, helper.DirectoryPath, this.config.BrainUrl, this.config.NodePath) : null;
         this.brain = new BrainClient(this.config.BrainUrl, this.config.TimeoutSeconds, this.config.PlanTimeoutSeconds, msg => this.Monitor.Log(msg, LogLevel.Warn));
         // With planning off the planner is never built: no world, no plan requests, no asset edits.
         this.planner = this.config.Planning ? new Planner(helper, this.Monitor, this.brain, this.Route) : null;
@@ -85,10 +88,19 @@ public sealed class ModEntry : Mod
             this.Reset();
             if (!OwnsSharedState)
                 return;
-            this.planner?.OnSaveLoaded();
+            // The brain is started here when nothing answers; the world snapshot waits for it.
+            this.planner?.OnSaveLoaded(Context.IsOnHostComputer ? this.launcher?.EnsureRunning() ?? Task.CompletedTask : Task.CompletedTask);
             this.relay.OnSaveLoaded();
         };
         this.Monitor.Log($"Townsfolk: brain at {this.config.BrainUrl} (host computer only), NPCs: {(this.config.AllNpcs ? "all" : string.Join(", ", this.config.EnabledNpcs))}, planning {(this.config.Planning ? "on" : "off")}", LogLevel.Info);
+    }
+
+    // SMAPI calls this when the game quits: the brain the mod started goes with it.
+    protected override void Dispose(bool disposing)
+    {
+        if (disposing)
+            this.launcher?.Dispose();
+        base.Dispose(disposing);
     }
 
     // Screen 0 is the game itself: the host on the host computer, the farmhand on theirs. A
@@ -161,9 +173,55 @@ public sealed class ModEntry : Mod
         // A conversation that is neither waiting nor showing a menu was abandoned (question box
         // closed without a pick). It is finished; start a new one.
         npc.faceTowardFarmerForPeriod(6000, 4, false, Game1.player);
-        npc.doEmote(Character.pauseEmote);
         s.Convo = new Conversation(npc);
-        s.Convo.Ask(this.AskTalk(this.BuildTalk(npc, s.Convo, null)));
+        // The same NPC, the same day, after walking away mid-conversation: pick it up where it
+        // stopped, from the transcript kept here. A different NPC starts a new chat.
+        Choice? resumeFrom = null;
+        if (s.Abandoned.Remove(npc.Name, out List<TranscriptLine>? kept))
+        {
+            if (kept.Count > 0 && kept[^1].Speaker == "player")
+            {
+                resumeFrom = new Choice("resume", kept[^1].Text);
+                kept.RemoveAt(kept.Count - 1);
+            }
+            s.Convo.Transcript.AddRange(kept);
+            s.Convo.Turns = kept.Count(t => t.Speaker == "npc");
+        }
+        this.AskAndWait(s.Convo, this.BuildTalk(npc, s.Convo, resumeFrom));
+    }
+
+    // Asks the brain and opens the waiting box at once, so there is never a moment where the world
+    // runs and a box pops up later. The box is an active menu: the player cannot walk away, and in
+    // single player time stands still as it does in vanilla dialogue.
+    private void AskAndWait(Conversation c, TalkRequest req)
+    {
+        c.Ask(this.AskTalk(req));
+        this.ShowWaiting(c);
+    }
+
+    private void ShowWaiting(Conversation c)
+    {
+        if (Game1.activeClickableMenu is null)
+        {
+            c.Box = new WaitingBox(c.Npc);
+            Game1.activeClickableMenu = c.Box;
+        }
+    }
+
+    // Closes our waiting box if it is the open menu. Anything else the player opened is left alone.
+    private static void CloseWaiting(Conversation c)
+    {
+        if (c.Box is not null && Game1.activeClickableMenu == c.Box)
+            Game1.activeClickableMenu = null;
+        c.Box = null;
+    }
+
+    // The conversation stops here but may be resumed today: keep what was said.
+    private void Abandon(ScreenState s, Conversation c)
+    {
+        if (c.Transcript.Count > 0)
+            s.Abandoned[c.Npc.Name] = new List<TranscriptLine>(c.Transcript);
+        s.Convo = null;
     }
 
     // The host computer asks its own brain. A farmhand asks the host; that Task completes with
@@ -264,10 +322,23 @@ public sealed class ModEntry : Mod
         this.planner?.OnUpdateTicked();
 
         ScreenState s = this.Screen;
+        this.CaptureGameLines(s);
         if (s.Convo?.Pending is not { } done)
             return;
 
         Conversation c = s.Convo;
+        // The player pressed Escape on the waiting box: the conversation ends here, cleanly, and
+        // the reply, if it ever comes, is never shown.
+        if (c.Box is { UserClosed: true })
+        {
+            c.Box = null;
+            c.Pending = null;
+            this.Abandon(s, c);
+            return;
+        }
+        // Between turns the box is up again as soon as no other menu is.
+        if (c.Box is null)
+            this.ShowWaiting(c);
         // A reply that has not come within the talk timeout is given up on here, on the game
         // thread, whatever state the request is in. Its late answer, if any, is never shown.
         // This is also the farmhand's relay wait: no talk.resp in time means vanilla below.
@@ -278,13 +349,16 @@ public sealed class ModEntry : Mod
         // The player left the map or a cutscene started while we waited: drop the reply quietly.
         if (!Context.IsWorldReady || Game1.eventUp || Game1.currentLocation != c.Location)
         {
-            s.Convo = null;
+            CloseWaiting(c);
+            this.Abandon(s, c);
             return;
         }
 
-        // A menu is still open (the closing question box, or the inventory): show the reply once it closes.
-        if (Game1.activeClickableMenu is not null)
+        // Another menu is open (the inventory, say): show the reply once it closes. Our own
+        // waiting box is replaced by the reply in this same tick.
+        if (Game1.activeClickableMenu is not null && Game1.activeClickableMenu != c.Box)
             return;
+        CloseWaiting(c);
 
         c.Pending = null;
         TalkResponse? reply = done.Status == TaskStatus.RanToCompletion ? done.Result : null;
@@ -318,6 +392,7 @@ public sealed class ModEntry : Mod
             // Canned fallback lines are not something the NPC really said; keep them out of memory.
             if (reply.Source != "fallback")
                 this.Record(c.Npc, reply.Line, null);
+            s.OwnLines.Add(reply.Line);
             Game1.DrawDialogue(new Dialogue(c.Npc, null, reply.Line));
             s.Convo = null;
             return;
@@ -336,10 +411,20 @@ public sealed class ModEntry : Mod
         TalkChoice? picked = reply.Choices.FirstOrDefault(ch => ch.Id == answer);
         if (picked is null)
         {
-            this.Screen.Convo = null;
+            // The question box was closed without a pick: the chat can be resumed today.
+            this.Abandon(this.Screen, c);
             return;
         }
         this.Record(c.Npc, reply.Line, picked.Text, picked.Fact);
+        // The brain's goodbye: a short closing line and nothing more is asked of the brain.
+        if (picked.Bye == true)
+        {
+            this.Screen.Convo = null;
+            string closing = string.IsNullOrWhiteSpace(picked.Closing) ? "See you around." : picked.Closing;
+            this.Screen.OwnLines.Add(closing);
+            Game1.DrawDialogue(new Dialogue(c.Npc, null, closing));
+            return;
+        }
         if (picked.Join == true && reply.Happening is { } h)
             this.Join(c.Npc, h, picked.Delta);
         else
@@ -347,8 +432,41 @@ public sealed class ModEntry : Mod
         var said = new Choice(picked.Id, picked.Text);
         TalkRequest req = this.BuildTalk(c.Npc, c, said);
         c.Transcript.Add(new TranscriptLine("player", picked.Text));
-        c.Npc.doEmote(Character.pauseEmote);
+        // The question box is still closing; the tick opens the waiting box as soon as it has.
         c.Ask(this.AskTalk(req));
+        c.Box = null;
+    }
+
+    // Records the game's own lines the player sees from an enabled villager: first meetings,
+    // everyday lines, birthdays. Each distinct line once per NPC per day. They go to the brain as
+    // an event ("I said (game line)") and with every talk request, so a Claude turn knows them.
+    // Lines this mod wrote itself (OwnLines) are not the game's and are skipped.
+    private void CaptureGameLines(ScreenState s)
+    {
+        if (Game1.activeClickableMenu is not DialogueBox { characterDialogue: { } d } || d.speaker is not { } npc || !this.IsEnabled(npc))
+            return;
+        string text = CleanGameLine(d.getCurrentDialogue(), Game1.player.Name);
+        if (text.Length == 0 || s.OwnLines.Contains(text) || !s.GameLinesSeen.Add($"{npc.Name}|{text}"))
+            return;
+        if (!s.GameLines.TryGetValue(npc.Name, out List<string>? lines))
+            s.GameLines[npc.Name] = lines = new List<string>();
+        lines.Add(text);
+        if (lines.Count > MaxGameLines)
+            lines.RemoveAt(0);
+        this.AddOwnEvent(new DayEvent("said", npc.Name, Game1.currentLocation.Name, Game1.timeOfDay, Witnesses(npc), Line: text));
+    }
+
+    private const int MaxGameLines = 8;
+
+    // The game's markup, turned into the words the player read: "@" is the player's name, "$h"
+    // style codes and "#" page breaks go, and so do "%" tokens and "^" gender switches.
+    internal static string CleanGameLine(string raw, string player)
+    {
+        string t = raw.Replace("@", player);
+        t = Regex.Replace(t, @"\$[A-Za-z0-9]+|%[A-Za-z]+|\^[^\^#]*", "");
+        t = Regex.Replace(t, @"[#$%^{}<>|]", " ");
+        t = Regex.Replace(t, @"\s+", " ").Trim();
+        return t.Length <= 400 ? t : t[..400];
     }
 
     // The game applies the gift a tick or so after the click; watch for up to one second.
@@ -542,7 +660,8 @@ public sealed class ModEntry : Mod
         this.Screen.JoinedToday ? true : null,
         EventsSeen(Game1.player),
         FarmerId(Game1.player),
-        FarmerName(Game1.player));
+        FarmerName(Game1.player),
+        this.Screen.GameLines.TryGetValue(npc.Name, out List<string>? said) ? new List<string>(said) : null);
 
     // Every ten game minutes: which villagers share a map right now, wherever the player is.
     // Main player only: the host sees every map and this list is the whole game's.
@@ -609,6 +728,13 @@ public sealed class ModEntry : Mod
         public bool JoinedToday { get; set; }
         // "npc|reason" for each vanilla chat recorded today.
         public HashSet<string> ChatsToday { get; } = new();
+        // Conversations the player walked away from today, by NPC, kept so the same NPC can pick the chat up again.
+        public Dictionary<string, List<TranscriptLine>> Abandoned { get; } = new();
+        // The game's own lines seen today, per NPC (sent with every talk), and every one seen (so each is recorded once).
+        public Dictionary<string, List<string>> GameLines { get; } = new();
+        public HashSet<string> GameLinesSeen { get; } = new();
+        // Lines this mod itself put in a dialogue box, which are not the game's.
+        public HashSet<string> OwnLines { get; } = new();
     }
 
     private sealed class Conversation
@@ -622,6 +748,8 @@ public sealed class ModEntry : Mod
         public NPC Npc { get; }
         public GameLocation Location { get; }
         public int Turns { get; set; }
+        // The waiting box while a reply is on its way; null when none is up.
+        public WaitingBox? Box { get; set; }
         public List<TranscriptLine> Transcript { get; } = new();
         public Task<TalkResponse?>? Pending { get; set; }
         // When Pending was asked for, from Environment.TickCount64.
