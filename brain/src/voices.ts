@@ -1,11 +1,29 @@
-// Hand-written character cards for the planning cast, in our own words. Not game dialogue.
-// Facts follow the Stardew Valley Wiki character pages (read 2026-10-17, see the canon reference
-// in the PR), paraphrased. test/voices.test.ts checks every card has every section and holds no
-// known canon line.
+// Hand-written character cards, in our own words. Not game dialogue. The planning cast's 8 are
+// below; the other 18 voiced villagers are in cards/roster.ts. Facts follow the Stardew Valley
+// Wiki character pages (read 2026-10-17, see the canon reference in the PR), paraphrased.
+// test/voices.test.ts checks every card has every section and holds no known canon line.
 //
 // Each card has a heart tier section: how open or guarded the character is with the farmer.
 // Only the tier for the current friendship reaches a prompt, so a stranger never gets the
 // close-friend version.
+
+import { ROSTER_CARDS } from "./cards/roster.ts";
+
+// Who the bridge may ever send to the brain. Same lists as mod/Voiced.cs (the bridge is where
+// they are enforced; test/voices.test.ts reads Voiced.cs to check the two agree). 34 giftable
+// villagers, minus 6 who gate progression by talking, minus the 2 children: 26.
+export const VOICED = [
+  "Alex", "Elliott", "Harvey", "Sam", "Sebastian", "Shane",
+  "Abigail", "Emily", "Haley", "Leah", "Maru", "Penny",
+  "Caroline", "Clint", "Demetrius", "Evelyn", "George", "Gus",
+  "Jodi", "Lewis", "Linus", "Marnie", "Pam", "Pierre", "Robin", "Willy",
+] as const;
+export const HARD_DENIED = [
+  "Dwarf", "Krobus", "Wizard", "Sandy", "Leo", "Kent",
+  "Birdie", "Bouncer", "Fizz", "Gil", "Governor", "Grandpa", "Gunther", "Henchman",
+  "Marlon", "Morris", "Mr. Qi", "Professor Snail",
+] as const;
+export const SOFT_DENIED = ["Jas", "Vincent"] as const;
 
 export const TIERS = ["0-2", "3-5", "6-8", "9-10"] as const;
 export type Tier = (typeof TIERS)[number];
@@ -21,6 +39,9 @@ export type Card = {
   topics: string[];
   neverSays: string[];
   tiers: Record<Tier, string>;
+  // Things canon frames as this villager's own business. Only this villager's talk prompt carries
+  // them, marked as never to be passed on; the planner and every other card leave them out.
+  private?: string[];
 };
 
 // Hearts run 0 to 10, and up to 14 for a spouse; anything from 9 up is the open tier.
@@ -31,7 +52,7 @@ export function tierFor(hearts: number): Tier {
   return "0-2";
 }
 
-export const CARDS: Readonly<Record<string, Card>> = {
+const CAST_CARDS: Readonly<Record<string, Card>> = {
   Abigail: {
     voice: "Restless, curious and dry. Bored by small-town routine and says so. Teases people she likes and respects anyone who takes her seriously. Short sentences, a little sarcasm, never cruel.",
     household: "Lives with her parents, Pierre and Caroline, in the rooms behind Pierre's General Store. Has a pet guinea pig named David. Birthday fall 13.",
@@ -170,6 +191,8 @@ export const CARDS: Readonly<Record<string, Card>> = {
   },
 };
 
+export const CARDS: Readonly<Record<string, Card>> = { ...CAST_CARDS, ...ROSTER_CARDS };
+
 export function cardFor(npc: string): Card | undefined {
   return Object.hasOwn(CARDS, npc) ? CARDS[npc] : undefined;
 }
@@ -194,8 +217,11 @@ export function talkCard(npc: string, hearts: number): string {
     `Loves: ${card.likes.join(", ")}. Dislikes: ${card.dislikes.join(", ")}.`,
     `Likes to talk about: ${card.topics.join(", ")}.`,
     `Never says: ${card.neverSays.join("; ")}.`,
+    card.private ? `Known only to ${npc}, never passed on or hinted to anyone else: ${card.private.join(" ")}` : "",
     tierLine(npc, card, hearts),
-  ].join("\n");
+  ]
+    .filter(Boolean)
+    .join("\n");
 }
 
 // The planner's shorter block: who they are, who they live with, their ties and habits, and how
