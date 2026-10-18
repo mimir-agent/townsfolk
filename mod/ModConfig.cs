@@ -5,7 +5,10 @@ namespace Townsfolk;
 /// <summary>config.json, created by SMAPI on first run.</summary>
 public sealed class ModConfig
 {
-    /// <summary>Base URL of the brain. It only ever listens on localhost.</summary>
+    /// <summary>
+    /// Base URL of the brain. It only ever listens on localhost, and only the host computer uses
+    /// it; a farmhand's game talks to the host's mod instead and never opens this URL.
+    /// </summary>
     public string BrainUrl { get; set; } = "http://127.0.0.1:7341";
 
     /// <summary>NPCs whose conversations go through the brain. Everyone else stays vanilla.</summary>

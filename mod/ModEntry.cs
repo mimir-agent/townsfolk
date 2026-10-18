@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using System.Globalization;
 using System.Linq;
 using System.Text.RegularExpressions;
 using System.Threading;
@@ -7,6 +8,7 @@ using System.Threading.Tasks;
 using Microsoft.Xna.Framework;
 using StardewModdingAPI;
 using StardewModdingAPI.Events;
+using StardewModdingAPI.Utilities;
 using StardewValley;
 
 namespace Townsfolk;
@@ -16,12 +18,19 @@ namespace Townsfolk;
 /// All decisions about what is said live in the brain (brain/).
 /// Threading rule: game state is only touched on the game thread (event handlers and UpdateTicked);
 /// HTTP runs on the thread pool and its Task is polled from UpdateTicked.
+/// Multiplayer: only the host computer (Context.IsOnHostComputer) reaches the brain, for the host
+/// and any split-screen player, each with their own farmerId. A farmhand on another computer goes
+/// through the host's mod (HostRelay). Day-end, saved, world and plan are the main player's alone.
+/// SMAPI raises every event once per split-screen screen on one mod instance, so what belongs to
+/// one player lives in PerScreen and what the whole game shares is written by screen 0 or the
+/// main player only.
 /// </summary>
 public sealed class ModEntry : Mod
 {
-    // protocol/day-end-request.schema.json caps witnesses per event at 40, and together at 200
-    // groups of at most 40.
-    private const int MaxWitnesses = 40;
+    // protocol/day-end-request.schema.json caps witnesses per event at 40, events per day at 500,
+    // and together at 200 groups of at most 40.
+    internal const int MaxWitnesses = 40;
+    private const int MaxEvents = 500;
     private const int MaxTogether = 200;
     // protocol/talk-response.schema.json caps one choice's delta at +-15. Re-checked here so a
     // misbehaving brain can never move friendship more than that in one pick.
@@ -29,22 +38,23 @@ public sealed class ModEntry : Mod
     // Conversations can be restarted all day, so talk-driven friendship per NPC per day is capped
     // too. Same number as the planner's daily friendship cap.
     private const int MaxTalkDeltaPerDay = 40;
+    // protocol: playerName is 1..40 chars; farmerName follows it. farmers[] holds at most 8
+    // (brain/src/protocol.ts MAX_FARMERS, the game's own limit).
+    private const int MaxFarmerName = 40;
+    private const int MaxFarmers = 8;
 
     private ModConfig config = new();
     private BrainClient brain = null!;
+    private HostRelay relay = null!;
     private Planner? planner;
+    // One per split-screen player: their conversation, gift, talk delta, join and chats today.
+    private readonly PerScreen<ScreenState> screens = new(() => new ScreenState());
+
+    // Host computer only, for the whole game: every farmer's events today, each with its farmerId.
     private readonly List<DayEvent> todaysEvents = new();
     // Groups of villagers seen on the same map today, keyed by location and sorted names so a
     // group that stands still all afternoon is sent once.
     private readonly Dictionary<string, Together> todaysTogether = new();
-    private Conversation? convo;
-    private PendingGift? pendingGift;
-    // Friendship points talk has moved today, per NPC, so the daily cap holds across conversations.
-    private readonly Dictionary<string, int> talkDeltaToday = new();
-    // The player joined a happening today; the brain offers no second join.
-    private bool joinedToday;
-    // "npc|reason" for each vanilla chat recorded today.
-    private readonly HashSet<string> chatsToday = new();
 
     // The day handed to the brain at DayEnding, and that request's Task. Saved fires after the
     // date has already moved on, so it reports this remembered date, and it is sent only once the
@@ -52,66 +62,84 @@ public sealed class ModEntry : Mod
     private DayRef? endedDay;
     private Task<bool>? endedDayPost;
 
+    private ScreenState Screen => this.screens.Value;
+
     public override void Entry(IModHelper helper)
     {
         this.config = helper.ReadConfig<ModConfig>();
         this.brain = new BrainClient(this.config.BrainUrl, this.config.TimeoutSeconds, this.config.PlanTimeoutSeconds, msg => this.Monitor.Log(msg, LogLevel.Warn));
         // With planning off the planner is never built: no world, no plan requests, no asset edits.
-        this.planner = this.config.Planning ? new Planner(helper, this.Monitor, this.brain) : null;
+        this.planner = this.config.Planning ? new Planner(helper, this.Monitor, this.brain, this.Route) : null;
+        this.relay = new HostRelay(helper, this.Monitor, this.brain, this.ModManifest.UniqueID, this.ModManifest.Version.ToString(),
+            this.config.TimeoutSeconds, this.IsEnabled, this.AddEvent, this.OnFarmerApply);
         helper.Events.Input.ButtonPressed += this.OnButtonPressed;
         helper.Events.GameLoop.UpdateTicked += this.OnUpdateTicked;
         helper.Events.GameLoop.TimeChanged += (_, _) => this.SampleTogether();
         helper.Events.GameLoop.DayEnding += this.OnDayEnding;
         helper.Events.GameLoop.Saved += this.OnSaved;
-        helper.Events.GameLoop.ReturnedToTitle += (_, _) =>
-        {
-            this.Reset();
-            this.planner?.Reset();
-        };
+        helper.Events.GameLoop.ReturnedToTitle += (_, _) => this.Reset();
         helper.Events.GameLoop.SaveLoaded += (_, _) =>
         {
             this.Reset();
+            if (!OwnsSharedState)
+                return;
             this.planner?.OnSaveLoaded();
+            this.relay.OnSaveLoaded();
         };
-        this.Monitor.Log($"Townsfolk: brain at {this.config.BrainUrl}, NPCs: {(this.config.AllNpcs ? "all" : string.Join(", ", this.config.EnabledNpcs))}, planning {(this.config.Planning ? "on" : "off")}", LogLevel.Info);
+        this.Monitor.Log($"Townsfolk: brain at {this.config.BrainUrl} (host computer only), NPCs: {(this.config.AllNpcs ? "all" : string.Join(", ", this.config.EnabledNpcs))}, planning {(this.config.Planning ? "on" : "off")}", LogLevel.Info);
     }
+
+    // Screen 0 is the game itself: the host on the host computer, the farmhand on theirs. A
+    // split-screen player is a later screen and must not reset what the whole game shares.
+    private static bool OwnsSharedState => Context.ScreenId == 0;
 
     private void Reset()
     {
+        this.screens.Value = new ScreenState();
+        if (!OwnsSharedState)
+            return;
         this.todaysEvents.Clear();
         this.todaysTogether.Clear();
-        this.talkDeltaToday.Clear();
-        this.joinedToday = false;
-        this.chatsToday.Clear();
-        this.convo = null;
-        this.pendingGift = null;
         this.endedDay = null;
         this.endedDayPost = null;
+        this.planner?.Reset();
+        this.relay.Reset();
     }
 
     private bool IsEnabled(NPC npc) =>
         npc.IsVillager && npc.CanSocialize && Voiced.Allows(npc.Name, this.config.Voiced, this.config.AllNpcs, this.config.EnabledNpcs);
 
+    /// <summary>farmerId on the wire: Farmer.UniqueMultiplayerID in decimal.</summary>
+    internal static string FarmerId(Farmer f) => f.UniqueMultiplayerID.ToString(CultureInfo.InvariantCulture);
+
+    internal static string FarmerName(Farmer f) => f.Name.Length <= MaxFarmerName ? f.Name : f.Name[..MaxFarmerName];
+
     private void OnButtonPressed(object? sender, ButtonPressedEventArgs e)
     {
+        // IsPlayerFree is false during a cutscene and a festival is checked on its own, so
+        // nothing is ever suppressed while either is on.
         if (!Context.IsWorldReady || !Context.IsPlayerFree || !e.Button.IsActionButton() || Game1.isFestival())
+            return;
+        // A farmhand whose host has no matching Townsfolk mod stays vanilla.
+        if (!Context.IsOnHostComputer && !this.relay.Ready)
             return;
 
         NPC? npc = FindNpcNear(e.Cursor.GrabTile);
         if (npc is null || !this.IsEnabled(npc) || CounterGuard.IsCounterClick(Game1.currentLocation, e.Cursor.GrabTile))
             return;
 
+        ScreenState s = this.Screen;
         // Holding an object means the player is giving a gift: let vanilla handle it and watch the result.
         if (Game1.player.ActiveObject is { } held)
         {
             Game1.player.friendshipData.TryGetValue(npc.Name, out Friendship? f);
-            this.pendingGift = new PendingGift(npc, held, f?.GiftsToday ?? 0);
+            s.Gift = new PendingGift(npc, held, f?.GiftsToday ?? 0);
             return;
         }
 
         // The game's own dialogue answers when it can move the game forward or carries the story.
         // Not suppressed, so vanilla runs this click exactly as it would without the mod.
-        if (this.convo?.Pending is null)
+        if (s.Convo?.Pending is null)
         {
             VanillaReason why = VanillaFirst.Decide(this.ReadGate(npc));
             if (why != VanillaReason.None)
@@ -124,16 +152,21 @@ public sealed class ModEntry : Mod
         this.Helper.Input.Suppress(e.Button);
 
         // A reply is on its way: swallow the extra click so vanilla dialogue does not race it.
-        if (this.convo?.Pending is not null)
+        if (s.Convo?.Pending is not null)
             return;
 
         // A conversation that is neither waiting nor showing a menu was abandoned (question box
         // closed without a pick). It is finished; start a new one.
         npc.faceTowardFarmerForPeriod(6000, 4, false, Game1.player);
         npc.doEmote(Character.pauseEmote);
-        this.convo = new Conversation(npc);
-        this.convo.Ask(this.brain.Talk(this.BuildTalk(npc, this.convo, null)));
+        s.Convo = new Conversation(npc);
+        s.Convo.Ask(this.AskTalk(this.BuildTalk(npc, s.Convo, null)));
     }
+
+    // The host computer asks its own brain. A farmhand asks the host; that Task completes with
+    // null after TimeoutSeconds, and the opening turn then falls back to vanilla checkAction.
+    private Task<TalkResponse?> AskTalk(TalkRequest req) =>
+        Context.IsOnHostComputer ? this.brain.Talk(req) : this.relay.Talk(req);
 
     // What VanillaFirst needs, read from the game. Reading CurrentDialogue loads today's
     // dialogue stack if it is not loaded yet, which is what vanilla's own click does first; the
@@ -171,10 +204,33 @@ public sealed class ModEntry : Mod
     // One chat per NPC per reason per day: a birthday NPC clicked five times is one memory.
     private void RecordChat(NPC npc, VanillaReason why)
     {
-        if (!this.chatsToday.Add($"{npc.Name}|{why}"))
+        if (!this.Screen.ChatsToday.Add($"{npc.Name}|{why}"))
             return;
-        this.todaysEvents.Add(new DayEvent("chat", npc.Name, Game1.currentLocation.Name, Game1.timeOfDay, Witnesses(npc), Reason: VanillaFirst.WireName(why)));
+        this.AddOwnEvent(new DayEvent("chat", npc.Name, Game1.currentLocation.Name, Game1.timeOfDay, Witnesses(npc), Reason: VanillaFirst.WireName(why)));
         this.Monitor.Log($"Vanilla dialogue for {npc.Name} ({VanillaFirst.WireName(why)}).", LogLevel.Debug);
+    }
+
+    // Something this screen's player did. On the host computer it joins the day's events; a
+    // farmhand sends it to the host as it happens, and the host puts the sender's id over these.
+    private void AddOwnEvent(DayEvent ev)
+    {
+        DayEvent stamped = ev with { FarmerId = FarmerId(Game1.player), FarmerName = FarmerName(Game1.player) };
+        if (Context.IsOnHostComputer)
+            this.AddEvent(stamped);
+        else
+            this.relay.SendEvent(stamped);
+    }
+
+    // Host computer: one more event for tonight. Past the protocol's daily cap the brain would
+    // refuse the whole day, so later events are left out instead.
+    private void AddEvent(DayEvent ev)
+    {
+        if (this.todaysEvents.Count >= MaxEvents)
+        {
+            this.Monitor.LogOnce($"More than {MaxEvents} events today; the rest are not remembered.", LogLevel.Debug);
+            return;
+        }
+        this.todaysEvents.Add(ev);
     }
 
     // Event ids the player has seen, for the brain to pick each NPC's own (brain/src/story.ts).
@@ -182,8 +238,8 @@ public sealed class ModEntry : Mod
     private static readonly Regex EventId = new(@"^[A-Za-z0-9_.-]{1,60}$", RegexOptions.CultureInvariant);
     private const int MaxEventsSeen = 2000;
 
-    internal static List<string> EventsSeen() =>
-        Game1.player.eventsSeen.Where(id => EventId.IsMatch(id)).Take(MaxEventsSeen).ToList();
+    internal static List<string> EventsSeen(Farmer p) =>
+        p.eventsSeen.Where(id => EventId.IsMatch(id)).Take(MaxEventsSeen).ToList();
 
     private static NPC? FindNpcNear(Vector2 grabTile)
     {
@@ -199,15 +255,18 @@ public sealed class ModEntry : Mod
 
     private void OnUpdateTicked(object? sender, UpdateTickedEventArgs e)
     {
+        this.relay.OnUpdateTicked();
         this.CheckGift();
         this.planner?.OnUpdateTicked();
 
-        if (this.convo?.Pending is not { } done)
+        ScreenState s = this.Screen;
+        if (s.Convo?.Pending is not { } done)
             return;
 
-        Conversation c = this.convo;
+        Conversation c = s.Convo;
         // A reply that has not come within the talk timeout is given up on here, on the game
         // thread, whatever state the request is in. Its late answer, if any, is never shown.
+        // This is also the farmhand's relay wait: no talk.resp in time means vanilla below.
         bool overdue = !done.IsCompleted && TalkWait.Overdue(c.AskedAtMs, Environment.TickCount64, this.config.TimeoutSeconds);
         if (!done.IsCompleted && !overdue)
             return;
@@ -215,7 +274,7 @@ public sealed class ModEntry : Mod
         // The player left the map or a cutscene started while we waited: drop the reply quietly.
         if (!Context.IsWorldReady || Game1.eventUp || Game1.currentLocation != c.Location)
         {
-            this.convo = null;
+            s.Convo = null;
             return;
         }
 
@@ -236,7 +295,7 @@ public sealed class ModEntry : Mod
         // Brain down, slow, or out of good answers on the opening turn: the NPC says their normal line.
         if (c.Turns == 0 && (reply is null || reply.Source == "fallback"))
         {
-            this.convo = null;
+            s.Convo = null;
             this.Monitor.Log($"Brain gave no usable reply; vanilla dialogue for {c.Npc.Name}.", LogLevel.Debug);
             c.Npc.checkAction(Game1.player, Game1.currentLocation);
             return;
@@ -256,7 +315,7 @@ public sealed class ModEntry : Mod
             if (reply.Source != "fallback")
                 this.Record(c.Npc, reply.Line, null);
             Game1.DrawDialogue(new Dialogue(c.Npc, null, reply.Line));
-            this.convo = null;
+            s.Convo = null;
             return;
         }
 
@@ -273,7 +332,7 @@ public sealed class ModEntry : Mod
         TalkChoice? picked = reply.Choices.FirstOrDefault(ch => ch.Id == answer);
         if (picked is null)
         {
-            this.convo = null;
+            this.Screen.Convo = null;
             return;
         }
         this.Record(c.Npc, reply.Line, picked.Text, picked.Fact);
@@ -285,23 +344,24 @@ public sealed class ModEntry : Mod
         TalkRequest req = this.BuildTalk(c.Npc, c, said);
         c.Transcript.Add(new TranscriptLine("player", picked.Text));
         c.Npc.doEmote(Character.pauseEmote);
-        c.Ask(this.brain.Talk(req));
+        c.Ask(this.AskTalk(req));
     }
 
     // The game applies the gift a tick or so after the click; watch for up to one second.
     private void CheckGift()
     {
-        if (this.pendingGift is not { } g)
+        ScreenState s = this.Screen;
+        if (s.Gift is not { } g)
             return;
         bool given = Game1.player.friendshipData.TryGetValue(g.Npc.Name, out Friendship? f) && f.GiftsToday > g.GiftsBefore;
         if (!given)
         {
             if (++g.TicksWaited > 60)
-                this.pendingGift = null;
+                s.Gift = null;
             return;
         }
-        this.pendingGift = null;
-        this.todaysEvents.Add(new DayEvent(
+        s.Gift = null;
+        this.AddOwnEvent(new DayEvent(
             "gift", g.Npc.Name, Game1.currentLocation.Name, Game1.timeOfDay, Witnesses(g.Npc),
             Item: g.Item.DisplayName, Taste: TasteName(g.Npc.getGiftTasteForThisItem(g.Item))));
     }
@@ -330,18 +390,20 @@ public sealed class ModEntry : Mod
     };
 
     private void Record(NPC npc, string npcLine, string? playerChoice, TalkFact? fact = null) =>
-        this.todaysEvents.Add(new DayEvent("talk", npc.Name, Game1.currentLocation.Name, Game1.timeOfDay, Witnesses(npc), NpcLine: npcLine, PlayerChoice: playerChoice, Fact: fact));
+        this.AddOwnEvent(new DayEvent("talk", npc.Name, Game1.currentLocation.Name, Game1.timeOfDay, Witnesses(npc), NpcLine: npcLine, PlayerChoice: playerChoice, Fact: fact));
 
     // Adds a picked reply's friendship points, clamped to the per-choice cap and to what is left
     // of this NPC's daily talk cap. Points only: hearts follow from points in the game itself.
+    // Always this screen's own player, on their own computer.
     private void AddTalkFriendship(NPC npc, int delta)
     {
+        Dictionary<string, int> today = this.Screen.TalkDeltaToday;
         int clamped = Math.Clamp(delta, -MaxChoiceDelta, MaxChoiceDelta);
-        this.talkDeltaToday.TryGetValue(npc.Name, out int soFar);
+        today.TryGetValue(npc.Name, out int soFar);
         int applied = Math.Clamp(soFar + clamped, -MaxTalkDeltaPerDay, MaxTalkDeltaPerDay) - soFar;
         if (applied == 0)
             return;
-        this.talkDeltaToday[npc.Name] = soFar + applied;
+        today[npc.Name] = soFar + applied;
         Game1.player.changeFriendship(applied, npc);
         this.Monitor.Log($"Talk friendship {npc.Name} {applied:+#;-#;0} (asked {delta}).", LogLevel.Trace);
     }
@@ -352,13 +414,13 @@ public sealed class ModEntry : Mod
     // one the game cannot find is left out of the gain but still witnesses it.
     private void Join(NPC spokenTo, HappeningView h, int gain)
     {
-        this.joinedToday = true;
+        this.Screen.JoinedToday = true;
         List<string> others = h.Participants
             .Where(p => p != spokenTo.Name && ProtocolName.IsMatch(p))
             .Distinct()
             .Take(MaxWitnesses)
             .ToList();
-        this.todaysEvents.Add(new DayEvent("join", spokenTo.Name, h.Location, Game1.timeOfDay, others, Topic: h.Topic));
+        this.AddOwnEvent(new DayEvent("join", spokenTo.Name, h.Location, Game1.timeOfDay, others, Topic: h.Topic));
         this.AddTalkFriendship(spokenTo, gain);
         foreach (string name in others)
         {
@@ -368,19 +430,20 @@ public sealed class ModEntry : Mod
         this.Monitor.Log($"Joined {h.Topic} at {h.Location} with {string.Join(", ", h.Participants)}.", LogLevel.Debug);
     }
 
-    // Sent every night, even with no events: the brain holds it pending until Saved, and an empty
-    // day still replaces a pending day left over from a reload without saving.
+    // Every screen starts a new day of its own. The main player then sends the day, every night
+    // even with no events: the brain holds it pending until Saved, and an empty day still
+    // replaces a pending day left over from a reload without saving.
     private void OnDayEnding(object? sender, DayEndingEventArgs e)
     {
-        this.convo = null;
-        GameDay today = Today();
+        this.screens.Value = new ScreenState();
+        if (!Context.IsMainPlayer)
+            return;
+        GameDay today = Today(Game1.player);
         var events = new List<DayEvent>(this.todaysEvents);
         List<Together> together = this.todaysTogether.Values.ToList();
         this.todaysEvents.Clear();
         this.todaysTogether.Clear();
-        this.talkDeltaToday.Clear();
-        this.joinedToday = false;
-        this.chatsToday.Clear();
+        this.relay.OnDayEnding();
         // A brand-new game ends its creation day before its save folder exists. SMAPI then names
         // a folder with no farm name yet ("_451964697"), which is not the id the save will have
         // and which the brain refuses. Nothing was played, so there is no day to send or plan.
@@ -401,13 +464,13 @@ public sealed class ModEntry : Mod
                 this.Monitor.Log($"Sent {count} events to the brain; they are kept once the game saves.", LogLevel.Debug);
         });
         // Tomorrow's plan is asked for once day-end lands; the planner reads it in the morning.
-        this.planner?.OnDayEnding(this.endedDayPost, new PlanRequest(saveId, Game1.player.Name, Planner.Tomorrow(), ReadStats(), EventsSeen()));
+        this.planner?.OnDayEnding(this.endedDayPost, new PlanRequest(saveId, Game1.player.Name, Planner.Tomorrow(), ReadStats(Game1.player), EventsSeen(Game1.player), this.PlannedFarmers()));
     }
 
     // The save finished, so the day the brain is holding is now real: tell it to commit.
     private void OnSaved(object? sender, SavedEventArgs e)
     {
-        if (this.endedDay is not { } day || this.endedDayPost is not { } dayEnd)
+        if (!Context.IsMainPlayer || this.endedDay is not { } day || this.endedDayPost is not { } dayEnd)
             return;
         var req = new SavedRequest(Constants.SaveFolderName ?? "unknown", day);
         this.endedDay = null;
@@ -421,22 +484,65 @@ public sealed class ModEntry : Mod
         });
     }
 
+    // The farmers tonight's plan may address: the host, split-screen players on this computer,
+    // and farmhands whose mod said hello with our version. Nobody else gets anything from a plan.
+    private List<PlanFarmer> PlannedFarmers() =>
+        Game1.getOnlineFarmers()
+            .Where(f => f.IsMainPlayer || this.IsSplitScreen(f.UniqueMultiplayerID) || this.relay.IsGreeted(f.UniqueMultiplayerID))
+            .Select(f => new PlanFarmer(FarmerId(f), FarmerName(f), Hearts(f)))
+            .Take(MaxFarmers)
+            .ToList();
+
+    private bool IsSplitScreen(long farmerId) => this.Helper.Multiplayer.GetConnectedPlayer(farmerId)?.IsSplitScreen == true;
+
+    // protocol/plan-request.schema.json: hearts 0..14 (14 for a spouse), keyed by NPC name.
+    private static Dictionary<string, int> Hearts(Farmer f) =>
+        f.friendshipData.Keys
+            .Where(npc => ProtocolName.IsMatch(npc))
+            .ToDictionary(npc => npc, npc => Math.Clamp(f.getFriendshipHeartLevelForNPC(npc), 0, 14));
+
+    // Host: plan parts for a farmer other than the host. A split-screen player applies them on
+    // their own screen; a farmhand's mod gets them as townsfolk.farmer.apply.
+    private void Route(long farmerId, FarmerApply apply)
+    {
+        if (this.IsSplitScreen(farmerId))
+            this.planner?.Queue(apply);
+        else if (this.relay.IsGreeted(farmerId))
+            this.relay.SendApply(farmerId, apply);
+        else
+            this.Monitor.Log($"Dropped plan parts for farmer {farmerId}: not in the game with a matching Townsfolk mod.", LogLevel.Debug);
+    }
+
+    // Farmhand: the host sent plan parts. Only this farmer's own are applied, on this game.
+    private void OnFarmerApply(FarmerApply apply)
+    {
+        if (apply.FarmerId != FarmerId(Game1.player))
+            this.Monitor.Log($"Ignored plan parts for farmer {apply.FarmerId}: this game plays {FarmerId(Game1.player)}.", LogLevel.Debug);
+        else if (this.planner is null)
+            this.Monitor.Log("Ignored plan parts from the host: planning is off in this config.", LogLevel.Debug);
+        else
+            this.planner.Queue(apply);
+    }
+
     private TalkRequest BuildTalk(NPC npc, Conversation c, Choice? recent) => new(
         Constants.SaveFolderName ?? "unknown",
         npc.Name,
         Game1.player.Name,
-        Today(),
+        Today(Game1.player),
         new FriendshipInfo(Game1.player.getFriendshipHeartLevelForNPC(npc.Name), Game1.player.getFriendshipLevelForNPC(npc.Name)),
         recent,
         new List<TranscriptLine>(c.Transcript),
-        ReadStats(),
-        this.joinedToday ? true : null,
-        EventsSeen());
+        ReadStats(Game1.player),
+        this.Screen.JoinedToday ? true : null,
+        EventsSeen(Game1.player),
+        FarmerId(Game1.player),
+        FarmerName(Game1.player));
 
     // Every ten game minutes: which villagers share a map right now, wherever the player is.
+    // Main player only: the host sees every map and this list is the whole game's.
     private void SampleTogether()
     {
-        if (!Context.IsWorldReady || this.todaysTogether.Count >= MaxTogether)
+        if (!Context.IsWorldReady || !Context.IsMainPlayer || this.todaysTogether.Count >= MaxTogether)
             return;
         foreach (GameLocation location in Game1.locations)
         {
@@ -457,10 +563,9 @@ public sealed class ModEntry : Mod
         }
     }
 
-    // All stats the brain's table knows about. Which NPC may know which is the brain's call.
-    private static GameStats ReadStats()
+    // All stats the brain's table knows about, for one farmer. Which NPC may know which is the brain's call.
+    internal static GameStats ReadStats(Farmer p)
     {
-        Farmer p = Game1.player;
         int? ccRooms = Game1.getLocationFromName("CommunityCenter") is StardewValley.Locations.CommunityCenter cc
             ? cc.areasComplete.Count(done => done)
             : null;
@@ -478,13 +583,27 @@ public sealed class ModEntry : Mod
             p.Money);
     }
 
-    private static GameDay Today() => new(
+    // The date, time and weather, with the location of the given farmer.
+    internal static GameDay Today(Farmer p) => new(
         Game1.currentSeason,
         Game1.dayOfMonth,
         Game1.year,
         Game1.timeOfDay,
         Game1.isLightning ? "storm" : Game1.isRaining ? "rain" : Game1.isSnowing ? "snow" : Game1.isDebrisWeather ? "windy" : "sunny",
-        Game1.currentLocation?.Name ?? "unknown");
+        p.currentLocation?.Name ?? "unknown");
+
+    /// <summary>One player's state for today. Replaced, not cleared, at day end and on load.</summary>
+    private sealed class ScreenState
+    {
+        public Conversation? Convo { get; set; }
+        public PendingGift? Gift { get; set; }
+        // Friendship points talk has moved today, per NPC, so the daily cap holds across conversations.
+        public Dictionary<string, int> TalkDeltaToday { get; } = new();
+        // The player joined a happening today; the brain offers no second join.
+        public bool JoinedToday { get; set; }
+        // "npc|reason" for each vanilla chat recorded today.
+        public HashSet<string> ChatsToday { get; } = new();
+    }
 
     private sealed class Conversation
     {

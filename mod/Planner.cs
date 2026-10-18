@@ -18,6 +18,11 @@ namespace Townsfolk;
 /// asks for tomorrow's plan without waiting; once the new day has started and the plan is in, it
 /// applies it: schedules through Characters/schedules/&lt;Name&gt;, one mailed quest through
 /// Data/Quests and Data/mail, friendship shifts toward the player.
+/// Multiplayer: the world, the plan request and schedules are the main player's alone (NPC
+/// movement is host-run). Friendship shifts and the quest are split by farmer; another farmer's
+/// parts go to that farmer through the route callback and come back here, on that farmer's own
+/// screen or computer, through Queue. Each farmer applies only their own parts to their own
+/// Game1.player.
 /// Threading rule: HTTP runs on the thread pool and only produces a Task. The Task is read from
 /// UpdateTicked, so every game object is touched on the game thread.
 /// Any failure (brain down, slow, wrong day, bad answer) leaves the day vanilla.
@@ -51,6 +56,10 @@ public sealed class Planner
     // PathFindController.isPositionImpassableForNPCSchedule(location, x, y, npc): the per-step
     // test of the pathfinder that walks villagers along their schedules.
     private readonly IReflectedMethod impassableForSchedule;
+    // Sends plan parts to a farmer other than the host (split-screen or farmhand).
+    private readonly Action<long, FarmerApply> route;
+    // Plan parts waiting for their farmer's own screen, keyed by farmerId. Filled by Queue.
+    private readonly Dictionary<string, FarmerApply> queued = new();
 
     // The plan request in flight and the day it is for. Set at DayEnding, cleared once applied or dropped.
     private Task<PlanResponse?>? planPost;
@@ -64,11 +73,12 @@ public sealed class Planner
     // exist after a reload. Kept in data/<save folder>.json in the mod folder.
     private QuestArchive archive = new();
 
-    public Planner(IModHelper helper, IMonitor monitor, BrainClient brain)
+    public Planner(IModHelper helper, IMonitor monitor, BrainClient brain, Action<long, FarmerApply> route)
     {
         this.helper = helper;
         this.monitor = monitor;
         this.brain = brain;
+        this.route = route;
         // Protected in the game, so read through SMAPI. Throws at load if a game update renames it.
         this.impassableForSchedule = helper.Reflection.GetMethod(typeof(PathFindController), "isPositionImpassableForNPCSchedule");
         helper.Events.Content.AssetRequested += this.OnAssetRequested;
@@ -82,11 +92,15 @@ public sealed class Planner
         this.planPost = null;
         this.planFor = null;
         this.dayStartedTick = null;
+        this.queued.Clear();
         this.Unserve();
         this.archive = new QuestArchive();
     }
 
-    /// <summary>Save loaded: load this save's mailed quests and send the world snapshot.</summary>
+    /// <summary>
+    /// Save loaded (screen 0): load this save's mailed quests, on every computer, since each
+    /// farmer's own game serves its quests. The main player also sends the world snapshot.
+    /// </summary>
     public void OnSaveLoaded()
     {
         this.Reset();
@@ -94,6 +108,8 @@ public sealed class Planner
         // Always: the cached assets may still hold the quests of the save loaded before this one.
         this.helper.GameContent.InvalidateCache("Data/Quests");
         this.helper.GameContent.InvalidateCache("Data/mail");
+        if (!Context.IsMainPlayer)
+            return;
         WorldRequest world = ReadWorld();
         int locations = world.Locations.Count, items = world.Items.Count;
         // Fire and forget. If it fails, every plan request answers 409 and every day runs vanilla.
@@ -115,18 +131,27 @@ public sealed class Planner
         this.planPost = dayEnd.ContinueWith(_ => this.brain.Plan(req), TaskScheduler.Default).Unwrap();
     }
 
+    /// <summary>Plan parts for one farmer, applied once that farmer's own screen is free.</summary>
+    public void Queue(FarmerApply apply) => this.queued[apply.FarmerId] = apply;
+
     private void OnDayStarted(object? sender, DayStartedEventArgs e)
     {
+        if (!Context.IsMainPlayer)
+            return;
         // Yesterday's schedule entries were keyed by yesterday's date, so they no longer match;
         // dropping them from the cache keeps one from matching the same date a year on.
         this.Unserve();
         this.dayStartedTick = Game1.ticks;
     }
 
-    /// <summary>Called every tick. Applies the plan once it is in and the day has settled.</summary>
+    /// <summary>
+    /// Called every tick on every screen. Applies this screen's queued parts, and on the main
+    /// player's screen the plan once it is in and the day has settled.
+    /// </summary>
     public void OnUpdateTicked()
     {
-        if (this.planPost is not { IsCompleted: true } done || this.planFor is not { } day)
+        this.ApplyQueued();
+        if (!Context.IsMainPlayer || this.planPost is not { IsCompleted: true } done || this.planFor is not { } day)
             return;
         if (!Context.IsWorldReady || this.dayStartedTick is not { } started || Game1.ticks - started < ApplyDelayTicks)
             return;
@@ -163,12 +188,36 @@ public sealed class Planner
     private void Apply(PlanResponse plan)
     {
         int schedules = this.ApplySchedules(plan.Schedules);
-        bool quest = plan.Quest is { } q && this.ApplyQuest(q);
-        int friendship = this.ApplyFriendship(plan.Friendship);
+        PlanSplit split = RelayRules.Split(plan.Day, plan.Friendship, plan.Quest, ModEntry.FarmerId(Game1.player));
+        bool quest = split.HostQuest is { } q && this.ApplyQuest(q);
+        int friendship = this.ApplyFriendship(split.HostFriendship);
+        foreach (string reason in split.Dropped)
+            this.monitor.Log($"Dropped plan parts: {reason}.", LogLevel.Debug);
+        foreach ((long id, FarmerApply parts) in split.Others)
+            this.route(id, parts);
         this.monitor.Log(
             $"Applied the plan for {Label(plan.Day)} at {Game1.timeOfDay}: {schedules} of {plan.Schedules.Count} schedules, " +
-            $"quest={(quest ? "mailed" : "none")}, {friendship} friendship shifts; the brain dropped {plan.Dropped.Count} parts.",
+            $"quest={(quest ? "mailed" : "none")}, {friendship} friendship shifts for the host, parts for {split.Others.Count} other farmers; " +
+            $"the brain dropped {plan.Dropped.Count} parts.",
             LogLevel.Info);
+    }
+
+    // This screen's farmer's parts from tonight's plan, sent by the host. Waits while a cutscene
+    // or festival is on; parts for another day are stale and dropped.
+    private void ApplyQueued()
+    {
+        if (this.queued.Count == 0 || !Context.IsWorldReady || Game1.eventUp || Game1.isFestival())
+            return;
+        if (!this.queued.Remove(ModEntry.FarmerId(Game1.player), out FarmerApply? parts))
+            return;
+        if (!SameDay(parts.Day, Today()))
+        {
+            this.monitor.Log($"Plan parts for {Label(parts.Day)} arrived on {Label(Today())}; dropped.", LogLevel.Debug);
+            return;
+        }
+        bool quest = parts.Quest is { } q && this.ApplyQuest(q);
+        int friendship = this.ApplyFriendship(parts.Friendship ?? new List<FriendshipShift>());
+        this.monitor.Log($"Applied the host's plan for {Label(parts.Day)}: quest={(quest ? "mailed" : "none")}, {friendship} friendship shifts.", LogLevel.Info);
     }
 
     // The brain's validator is authoritative. The bridge re-checks only what needs the live game:
@@ -431,7 +480,7 @@ public sealed class Planner
             .Take(MaxMarried)
             .ToList();
 
-        return new WorldRequest(Constants.SaveFolderName ?? "unknown", locations, items, festivals, married);
+        return new WorldRequest(Constants.SaveFolderName ?? "unknown", locations, items, festivals, married, ModEntry.FarmerId(Game1.player));
     }
 
     /// <summary>The day about to start, for the plan request sent at DayEnding.</summary>
