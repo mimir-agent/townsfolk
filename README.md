@@ -4,6 +4,27 @@ Working title. A Stardew Valley (SMAPI) mod where Claude runs the town: conversa
 
 Work in progress (weekend hackathon).
 
+## Playing
+
+Townsfolk runs a host-only brain with farmhand-only SMAPI + mod: only the computer that hosts the game runs the brain and talks to Claude. Single player is the host case. The full player steps ship in the release zip as `README.txt` (source: [`release/README.txt`](release/README.txt)).
+
+Not run on Windows yet. The Windows steps here and in `release/README.txt` (`start-brain.cmd`, finding `claude.cmd` or `claude.exe` on PATH, the Mac-built mod DLL under Windows SMAPI) have not been tried on a Windows PC.
+
+### Host (or playing alone)
+
+On the host only:
+
+1. Install SMAPI.
+2. Install the mod: unzip `townsfolk-vX.Y.Z.zip` into the game's `Mods` folder, giving `Mods/Townsfolk`.
+3. Install Node.js 24 or newer. The brain ships inside the zip (`Mods/Townsfolk/brain`) with nothing more to install.
+4. Let the brain reach Claude: log in to the Claude Code CLI once (`claude`), or set `TOWNSFOLK_MODEL=anthropic` and `ANTHROPIC_API_KEY` (the API key path is untested so far).
+5. Start the brain (`start-brain.cmd` on Windows, `sh start-brain.sh` on Mac or Linux) and leave it running. The brain must be running before the host loads the save.
+6. Start the game through SMAPI and load the farm.
+
+### Joining player
+
+Install SMAPI and the mod (unzip into `Mods`) only, nothing else: no Node.js, no brain, no Claude login, no API key. The host's brain does that work.
+
 ## Layout
 
 - `brain/`: the town brain, TypeScript on Node 24+ with no build step. A localhost HTTP server that writes each conversation turn and keeps per-NPC memory on disk.
@@ -48,7 +69,7 @@ What to expect when something is off:
 
 - Brain not running or slower than 8 seconds: the NPC says their normal game line. Nothing crashes.
 - Everyone else in town keeps their normal dialogue. To route every villager through the brain, set `"AllNpcs": true` in `Mods/Townsfolk/config.json` (created after the first launch) and restart the game.
-- Memory lives in `~/.local/state/townsfolk/<save folder>/<NPC>.json`, one file per NPC, holding only what that NPC took part in or saw (other villagers in the same location witness a talk or a gift). Delete a file to make them forget.
+- Memory lives in `~/.local/state/townsfolk/<save folder>/<NPC>.json` (Windows: `%LOCALAPPDATA%\townsfolk\...`), one file per NPC, holding only what that NPC took part in or saw (other villagers in the same location witness a talk or a gift). Delete a file to make them forget.
 - A day is remembered only once the game has saved it. If you quit without saving and replay the day, only the replayed version is kept. Each file stays under 32 KB: the last 14 days in full, a summary per season, and one short summary for anything older.
 - The bridge and brain speak protocol v1 (schemas in `protocol/`). A brain on another version answers 400, and the game treats that as the brain being down.
 - Logs: the brain terminal prints one line per reply; the game side writes to `~/.config/StardewValley/ErrorLogs/SMAPI-latest.txt`.
@@ -56,6 +77,21 @@ What to expect when something is off:
 `config.json` settings: `BrainUrl` (default `http://127.0.0.1:7341`), `EnabledNpcs`, `AllNpcs`, `TimeoutSeconds` (default 8), `Planning` (default true; false turns off the overnight plan entirely, conversations keep working), `PlanTimeoutSeconds` (default 150).
 
 Brain settings are environment variables, listed at the top of `brain/src/main.ts`. `TOWNSFOLK_MODEL=fake` runs with canned lines and no model at all; `TOWNSFOLK_MODEL=anthropic` uses `ANTHROPIC_API_KEY` (for players; not tried yet).
+
+## Release zip (Windows, macOS, Linux)
+
+```sh
+cd brain
+DOTNET=~/.dotnet/dotnet npm run release
+```
+
+Writes `dist/townsfolk-vX.Y.Z.zip`: one `Townsfolk/` folder the player unzips into `Mods`, holding the mod (`manifest.json`, `Townsfolk.dll`), the player instructions (`README.txt`, from `release/README.txt`), `start-brain.cmd` and `start-brain.sh`, and the brain source in `brain/` (no dependencies to install at runtime). The mod is built with `EnableModDeploy=false`, so nothing is copied into a Mods folder.
+
+One version number covers the release: `mod/manifest.json`, `mod/Townsfolk.csproj` and `brain/package.json` must match and `CHANGELOG.md` needs a `## X.Y.Z` heading. A test checks this and the script refuses to build otherwise. The release merge is tagged `vX.Y.Z`.
+
+`UpdateKeys` in `mod/manifest.json` stays empty until there is a Nexus page. Then set it to `["Nexus:<mod id>"]`, where the id is the number in the page URL (`nexusmods.com/stardewvalley/mods/<mod id>`).
+
+Only the host runs the brain. Joining players install SMAPI and the mod only. On Windows the brain keeps memory in `%LOCALAPPDATA%\townsfolk` and finds `claude` on PATH as `claude.exe` or the npm `claude.cmd`.
 
 ## Overnight planner
 

@@ -8,10 +8,11 @@
     "node": ">=24"
   },
   "scripts": {
-    "start": "node src/main.ts",
+    "start": "node start.mjs",
     "test": "node --test \"test/**/*.test.ts\"",
     "sim": "node sim/main.ts",
-    "typecheck": "tsc"
+    "typecheck": "tsc",
+    "release": "node scripts/release.ts"
   },
   "devDependencies": {
     "@types/node": "^24.0.0",
