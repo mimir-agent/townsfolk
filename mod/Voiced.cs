@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using System.Linq;
 #if !VOICED_PURE
 using Microsoft.Xna.Framework;
 using StardewValley;
