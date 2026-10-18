@@ -1,7 +1,8 @@
 // One conversation turn: build the prompt from this NPC's voice and memory, ask the model,
 // validate, retry once, and fall back to a safe canned line so the game never waits forever.
 
-import type { ModelAdapter } from "./model.ts";
+import type { ModelAdapter, ModelEvent } from "./model.ts";
+import { lineWhenComplete } from "./stream.ts";
 import type { FarmerMemory, NpcMemory } from "./memory.ts";
 import { dateLabel, farmerKey, sectionFor } from "./memory.ts";
 import type { Choice, GameStats, Happening, HappeningView, TalkFact, TalkRequest, TalkResponse } from "./protocol.ts";
@@ -316,13 +317,44 @@ export function playerTurns(req: TalkRequest): number {
   return req.transcript.filter((t) => t.speaker === "player").length + (req.recentChoice ? 1 : 0);
 }
 
+// The NPC's line from a reply still being written, once it is whole and would pass validation
+// as it stands (cleaned and fitted the way validateReply does it), else null. The final reply's
+// line is the same string when that reply passes.
+export function earlyLine(partial: string): string | null {
+  const raw = lineWhenComplete(partial);
+  if (raw === null) return null;
+  try {
+    return fitLine(clean(raw));
+  } catch {
+    return null;
+  }
+}
+
+// Milliseconds from the start of one attempt to each phase, -1 when the phase never came.
+//   queue  until the request reached the model (an earlier call on the same process, a process
+//          start, "/clear")
+//   first  until the first text of the reply
+//   line   until the NPC's line was whole
+//   done   until the whole reply was in
+export type TalkTiming = { queue: number; first: number; line: number; done: number; usage?: Extract<ModelEvent, { kind: "usage" }> };
+
+export function timingLine(npc: string, attempt: number, t: TalkTiming): string {
+  const u = t.usage;
+  const tokens = u ? `, tokens in ${u.input} + cache read ${u.cacheRead} + cache write ${u.cacheWrite}, out ${u.output} (thinking ${u.thinking})` : "";
+  return `talk ${npc} attempt ${attempt}: queue ${t.queue}ms, first token ${t.first}ms, line ${t.line}ms, done ${t.done}ms${tokens}`;
+}
+
 export async function talk(
   req: TalkRequest,
   mem: NpcMemory,
   town: TownState,
   ctx: TalkContext,
   model: ModelAdapter,
-  opts: { deadlineMs: number; log: (msg: string) => void; hostKey?: string },
+  // onLine: called at most once per talk, with the NPC's whole line as soon as it is written,
+  // before the choices are. Only a line that would pass validation is passed on. When that
+  // attempt then fails and a retry answers, the final reply carries the retry's line, which
+  // replaces it.
+  opts: { deadlineMs: number; log: (msg: string) => void; hostKey?: string; onLine?: (line: string) => void },
 ): Promise<TalkResponse> {
   const mustEnd = playerTurns(req) >= MAX_TURNS;
   const offer = joinOffer(req, ctx, mustEnd);
@@ -331,19 +363,40 @@ export async function talk(
   const session = talkSession(req.saveId, farmerKey(req, hostKey));
   const deadline = Date.now() + opts.deadlineMs;
   let reason = `no time left within the ${opts.deadlineMs}ms talk deadline`;
+  let lineSent = false;
   for (let attempt = 1; attempt <= 2; attempt++) {
     const remaining = deadline - Date.now();
     if (remaining < 500) break;
+    const t0 = Date.now();
+    const timing: TalkTiming = { queue: -1, first: -1, line: -1, done: -1 };
+    const onEvent = (e: ModelEvent): void => {
+      const at = Date.now() - t0;
+      if (e.kind === "sent") timing.queue = at;
+      else if (e.kind === "usage") timing.usage = e;
+      else {
+        if (timing.first < 0) timing.first = at;
+        if (timing.line < 0) {
+          const line = earlyLine(e.text);
+          if (line !== null) {
+            timing.line = at;
+            if (!lineSent && opts.onLine !== undefined) {
+              lineSent = true;
+              opts.onLine(line);
+            }
+          }
+        }
+      }
+    };
     try {
-      const t0 = Date.now();
-      const raw = await model.complete(system, user, AbortSignal.timeout(remaining), undefined, { session });
+      const raw = await model.complete(system, user, AbortSignal.timeout(remaining), undefined, { session, onEvent });
+      timing.done = Date.now() - t0;
+      opts.log(timingLine(req.npc, attempt, timing));
       const reply = validateReply(raw, mustEnd, offer);
-      opts.log(`talk ${req.npc} model answered in ${Date.now() - t0}ms`);
       return { v: 1, ...reply, choices: reply.end ? [] : withGoodbye(reply.choices, req, hostKey), source: "model" };
     } catch (err) {
       const kind = err instanceof InvalidReply ? "model reply failed validation" : "model call failed";
       reason = `${kind}: ${(err as Error).message}`;
-      opts.log(`talk ${req.npc} attempt ${attempt} failed: ${(err as Error).message}`);
+      opts.log(`talk ${req.npc} attempt ${attempt} failed after ${Date.now() - t0}ms: ${(err as Error).message}`);
     }
   }
   return fallback(req, mustEnd, reason);

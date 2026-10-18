@@ -1,0 +1,14 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/mimir-agent/townsfolk/protocol/talk-partial.schema.json",
+  "title": "POST /v1/talk streamed first line (Accept: application/x-ndjson)",
+  "description": "Sent at most once, as the first NDJSON line, when the NPC's line is written and before the choices are. The next and last line is a talk-response; its line replaces this one when they differ.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["v", "partial", "line"],
+  "properties": {
+    "v": { "$ref": "common.schema.json#/$defs/v" },
+    "partial": { "const": true },
+    "line": { "type": "string", "minLength": 1, "maxLength": 220 }
+  }
+}

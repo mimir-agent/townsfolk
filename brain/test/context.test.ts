@@ -123,8 +123,8 @@ test("each player has a model session of their own, and NPCs share only their pl
   assert.notEqual(a, b, "another player never shares it");
 });
 
-test("the timing line is logged for a successful call", async () => {
+test("the timing line names every phase for a successful call", async () => {
   const logs: string[] = [];
   await talk(talkReq(), emptyMemory("Abigail"), emptyTown(), NO_CONTEXT, fakeAdapter([DEFAULT_FAKE_REPLY]), { deadlineMs: 5000, log: (m) => logs.push(m) });
-  assert.ok(logs.some((l) => /talk Abigail model answered in \d+ms/.test(l)), logs.join("\n"));
+  assert.ok(logs.some((l) => /^talk Abigail attempt 1: queue \d+ms, first token \d+ms, line \d+ms, done \d+ms$/.test(l)), logs.join("\n"));
 });
