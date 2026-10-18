@@ -26,9 +26,6 @@ public sealed class WaitingBox : IClickableMenu
     /// <summary>True once the player closed the box themselves (Escape or back).</summary>
     public bool UserClosed { get; private set; }
 
-    /// <summary>How many dots show at a given moment: 1, 2, 3, then 1 again, a change every 350 ms.</summary>
-    public static int DotsAt(long nowMs) => 1 + (int)(nowMs / 350 % 3);
-
     public override void receiveKeyPress(Keys key)
     {
         if (Game1.options.doesInputListContain(Game1.options.menuButton, key))
@@ -70,7 +67,7 @@ public sealed class WaitingBox : IClickableMenu
         }
         int textX = x + 40 + portrait + 40;
         Utility.drawTextWithShadow(b, this.npc.displayName, Game1.dialogueFont, new Vector2(textX, y + 48), Game1.textColor);
-        string dots = new('.', DotsAt(Environment.TickCount64));
+        string dots = new('.', TalkWait.DotsAt(Environment.TickCount64));
         Utility.drawTextWithShadow(b, dots, Game1.dialogueFont, new Vector2(textX, y + 48 + 96), Game1.textColor);
         this.drawMouse(b);
     }

@@ -41,7 +41,7 @@ test("turn 3's prompt holds turns 1 and 2 of the transcript and a line the game 
 
 test("over HTTP: a game line sent as a 'said' event is in the NPC's memory the next day", async () => {
   await withServer(fakeAdapter([DEFAULT_FAKE_REPLY]), async (c) => {
-    const ev = { type: "said", npc: "Abigail", location: "Town", time: 1000, witnesses: [], line: VANILLA };
+    const ev = { type: "said" as const, npc: "Abigail", location: "Town", time: 1000, witnesses: [], line: VANILLA };
     assert.equal((await c.post("/v1/day-end", dayEnd([ev]))).status, 200);
     assert.equal((await c.post("/v1/saved", { v: 1, saveId: "Farm_123", day: { season: day.season, day: day.day, year: day.year } })).status, 200);
     const next = { ...day, day: day.day + 1 };

@@ -64,6 +64,15 @@ public class RelayRulesTests
     }
 
     [Fact]
+    public void A_said_event_needs_a_line_of_at_most_400_characters()
+    {
+        var said = new DayEvent("said", "Abigail", "Town", 1000, new List<string>(), Line: "Welcome to town!");
+        Assert.NotNull(Clean(said));
+        Assert.Null(Clean(said with { Line = null }));
+        Assert.Null(Clean(said with { Line = new string('x', 401) }));
+    }
+
+    [Fact]
     public void A_chat_needs_a_known_reason()
     {
         var chat = new DayEvent("chat", "Shane", "Saloon", 1900, new List<string>(), Reason: "birthday");

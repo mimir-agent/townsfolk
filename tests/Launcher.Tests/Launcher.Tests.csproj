@@ -1,0 +1,24 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <!-- Tests for finding node (mod/NodeLocator.cs) and the waiting dots (mod/TalkWait.cs). No game
+       types, so this runs without Stardew Valley installed:
+       ~/.dotnet/dotnet test tests/Launcher.Tests -->
+  <PropertyGroup>
+    <TargetFramework>net8.0</TargetFramework>
+    <Nullable>enable</Nullable>
+    <LangVersion>latest</LangVersion>
+    <IsPackable>false</IsPackable>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <Compile Include="../../mod/NodeLocator.cs" Link="NodeLocator.cs" />
+    <Compile Include="../../mod/TalkWait.cs" Link="TalkWait.cs" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <PackageReference Include="Microsoft.NET.Test.Sdk" Version="17.11.1" />
+    <PackageReference Include="xunit" Version="2.9.2" />
+    <PackageReference Include="xunit.runner.visualstudio" Version="2.8.2" />
+  </ItemGroup>
+
+</Project>

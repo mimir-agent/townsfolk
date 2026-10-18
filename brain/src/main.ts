@@ -7,6 +7,7 @@
 //   TOWNSFOLK_CLAUDE_BIN   default "claude" (on Windows found on PATH as claude.exe, .cmd or .bat)
 //   TOWNSFOLK_CLAUDE_MODEL default "haiku": talk (one warm claude process per player)
 //   TOWNSFOLK_PLAN_MODEL   default "sonnet": the overnight plan only (claude-cli); with the API, TOWNSFOLK_ANTHROPIC_PLAN_MODEL
+//   TOWNSFOLK_PARENT_PID   set by the mod: the brain stops when that process is gone
 //   ANTHROPIC_API_KEY      required only when TOWNSFOLK_MODEL=anthropic
 //   TOWNSFOLK_ANTHROPIC_MODEL default "claude-haiku-4-5": talk. TOWNSFOLK_ANTHROPIC_PLAN_MODEL default "claude-sonnet-4-5": plan
 
@@ -63,3 +64,17 @@ function stop(): void {
 }
 process.on("SIGINT", stop);
 process.on("SIGTERM", stop);
+
+// Started by the mod: when the game process that started this brain is gone (even if it was
+// killed and could not stop us), stop too, so no brain or claude process is left behind.
+const parentPid = Number(env.TOWNSFOLK_PARENT_PID ?? 0);
+if (Number.isInteger(parentPid) && parentPid > 0) {
+  setInterval(() => {
+    try {
+      process.kill(parentPid, 0);
+    } catch {
+      log(`parent process ${parentPid} is gone; stopping`);
+      stop();
+    }
+  }, 5000).unref();
+}
