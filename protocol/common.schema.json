@@ -9,6 +9,12 @@
       "pattern": "^[\\p{L}\\p{N}][\\p{L}\\p{N} ._'-]{0,59}$",
       "description": "Save ids and NPC names become file names, so the alphabet is closed and a leading dot is refused."
     },
+    "farmerId": {
+      "type": "string",
+      "pattern": "^-?[0-9]{1,20}$",
+      "description": "The decimal form of the game's Farmer.UniqueMultiplayerID. Each farmer has their own memory section with every NPC. A request with no farmerId is from the single-player main farmer (the host, once a world request has named it)."
+    },
+    "farmerName": { "type": "string", "minLength": 1, "maxLength": 40, "description": "The farmer's display name. Sent with farmerId, never alone." },
     "season": { "enum": ["spring", "summer", "fall", "winter"] },
     "dayRef": {
       "type": "object",
