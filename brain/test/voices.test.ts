@@ -6,7 +6,8 @@ import assert from "node:assert/strict";
 import { test } from "node:test";
 import { CAST } from "../src/cast.ts";
 import { fakeAdapter } from "../src/model.ts";
-import { CARDS, TIERS, cardFor, planCard, talkCard, tierFor, type Card } from "../src/voices.ts";
+import { readFileSync } from "node:fs";
+import { CARDS, HARD_DENIED, SOFT_DENIED, TIERS, VOICED, cardFor, planCard, talkCard, tierFor, type Card } from "../src/voices.ts";
 import { CANON_LINES } from "./canon-lines.ts";
 import { talkReq, withServer } from "./helpers.ts";
 import { GOOD_SCHEDULES, WORLD, npcsEntry, planReq, reply, spring } from "./plan-fixtures.ts";
@@ -18,9 +19,11 @@ test("tier selection by hearts: 0-2 guarded, 3-5, 6-8, 9 and up open (spouse hea
   for (const [hearts, tier] of cases) assert.equal(tierFor(hearts), tier, `${hearts} hearts`);
 });
 
-test("every cast member has a card with every section filled, and no extra cards", () => {
-  assert.deepEqual(Object.keys(CARDS).sort(), [...CAST].sort());
-  for (const npc of CAST) {
+test("every one of the 26 voiced villagers has a card with every section filled, and no extra cards", () => {
+  assert.equal(VOICED.length, 26);
+  assert.deepEqual(Object.keys(CARDS).sort(), [...VOICED].sort());
+  for (const npc of CAST) assert.ok((VOICED as readonly string[]).includes(npc), `cast member ${npc} is voiced`);
+  for (const npc of VOICED) {
     const c = cardFor(npc);
     assert.ok(c, npc);
     for (const k of ["voice", "household", "habits"] as const) assert.ok(c[k].trim().length > 20, `${npc} ${k}`);
@@ -34,14 +37,14 @@ test("every cast member has a card with every section filled, and no extra cards
 });
 
 function cardText(c: Card): string {
-  return [c.voice, c.household, c.habits, ...c.close, ...c.atOdds, ...c.likes, ...c.dislikes, ...c.topics, ...c.neverSays, ...Object.values(c.tiers)].join("\n");
+  return [c.voice, c.household, c.habits, ...c.close, ...c.atOdds, ...c.likes, ...c.dislikes, ...c.topics, ...c.neverSays, ...(c.private ?? []), ...Object.values(c.tiers)].join("\n");
 }
 
 const words = (s: string) => s.toLowerCase().replace(/[^a-z0-9' ]+/g, " ").split(/\s+/).filter(Boolean);
 
 test("no card repeats a known canon line, or any six-word run from one", () => {
   const RUN = 6;
-  for (const npc of CAST) {
+  for (const npc of VOICED) {
     const text = ` ${words(cardText(CARDS[npc]!)).join(" ")} `;
     for (const line of CANON_LINES) {
       const w = words(line);
@@ -130,4 +133,86 @@ test("talk prompt with no memories: only a low-hearts farmer is someone just get
   assert.match(low!, /just getting to know/);
   assert.doesNotMatch(close!, /just getting to know/);
   assert.match(close!, /keep to how close you already are/);
+});
+
+// The bridge (mod/Voiced.cs) is where who-reaches-the-brain is enforced; the brain keeps the
+// same lists so it never writes a card for a denied name. Read the C# source so the two agree.
+function csSet(source: string, field: string): string[] {
+  const m = new RegExp(`${field} = new HashSet<string>\\(StringComparer\\.Ordinal\\)\\s*\\{([^}]*)\\}`).exec(source);
+  assert.ok(m, `Voiced.cs ${field}`);
+  return [...m[1]!.matchAll(/"([^"]+)"/g)].map((x) => x[1]!);
+}
+
+test("Voiced.cs and voices.ts list the same 26 voiced, 18 hard-denied and 2 soft-denied names", () => {
+  const cs = readFileSync(new URL("../../mod/Voiced.cs", import.meta.url), "utf8");
+  assert.deepEqual(csSet(cs, "Roster").sort(), [...VOICED].sort());
+  assert.equal(HARD_DENIED.length, 18);
+  for (const n of HARD_DENIED) assert.ok(csSet(cs, "HardDeny").includes(n), `HardDeny has ${n}`);
+  assert.deepEqual(csSet(cs, "SoftDeny").sort(), [...SOFT_DENIED].sort());
+  for (const n of [...HARD_DENIED, ...SOFT_DENIED]) assert.ok(!(VOICED as readonly string[]).includes(n), `${n} not voiced`);
+});
+
+test("none of the 20 denied names gets a card", () => {
+  const denied = [...HARD_DENIED, ...SOFT_DENIED];
+  assert.equal(denied.length, 20);
+  for (const n of denied) {
+    assert.equal(cardFor(n), undefined, n);
+    assert.equal(planCard(n, 10), "", n);
+    assert.match(talkCard(n, 10), /a resident of Pelican Town/, n);
+  }
+});
+
+const ALL_HEARTS = [0, 4, 7, 10] as const;
+
+test("Clint's crush is on Clint's card only: Emily's card, and every other, never mentions it", () => {
+  for (const npc of VOICED) {
+    if (npc === "Clint") continue;
+    for (const h of ALL_HEARTS) {
+      for (const block of [talkCard(npc, h), planCard(npc, h)]) {
+        assert.doesNotMatch(block, /crush|how he feels about (her|Emily)|feelings for Emily/i, `${npc} at ${h}`);
+      }
+    }
+  }
+  for (const h of ALL_HEARTS) assert.doesNotMatch(talkCard("Emily", h), /Clint/, `Emily at ${h}`);
+});
+
+test("Clint's own talk card carries his crush on Emily as private", () => {
+  const t = talkCard("Clint", 0);
+  assert.match(t, /Known only to Clint, never passed on/);
+  assert.match(t, /crush on Emily/);
+});
+
+test("private items reach only that villager's talk prompt: never the planner, never another card", () => {
+  const withPrivate = VOICED.filter((n) => (CARDS[n]!.private ?? []).length > 0);
+  assert.ok(withPrivate.length >= 10, `${withPrivate.length} cards carry private items`);
+  for (const owner of withPrivate) {
+    for (const item of CARDS[owner]!.private!) {
+      for (const h of ALL_HEARTS) {
+        assert.ok(talkCard(owner, h).includes(item), `${owner} talk ${h}`);
+        assert.ok(!planCard(owner, h).includes(item), `${owner} plan ${h}`);
+      }
+      for (const other of VOICED) {
+        if (other === owner) continue;
+        assert.ok(!talkCard(other, 10).includes(item), `${owner}'s private item in ${other}'s card`);
+      }
+    }
+  }
+});
+
+test("Marnie's and Lewis's secret is private on Marnie's card, not stated on the open sections", () => {
+  const c = CARDS.Marnie!;
+  const open = [c.voice, c.household, c.habits, ...c.close, ...c.atOdds, ...c.topics, ...Object.values(c.tiers)].join("\n");
+  assert.doesNotMatch(open, /romance|dating|partner/i);
+  assert.ok(c.private!.some((p) => /Lewis/.test(p)));
+});
+
+test("a newly voiced villager's talk prompt carries its own card", async () => {
+  const model = fakeAdapter([JSON.stringify({ line: "Hm.", choices: [], end: true })]);
+  await withServer(model, async (c) => {
+    await c.post("/v1/talk", talkReq({ npc: "Clint", friendship: { hearts: 4, points: 1000 } }));
+  });
+  const user = model.calls[0]!.user;
+  assert.ok(user.includes(CARDS.Clint!.voice));
+  assert.ok(user.includes(CARDS.Clint!.tiers["3-5"]));
+  assert.ok(!user.includes(CARDS.Clint!.tiers["0-2"]));
 });
