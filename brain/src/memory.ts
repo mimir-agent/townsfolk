@@ -27,7 +27,8 @@ import type { DayEndRequest, DayEvent, DayRef, FarmerRef, Season, VanillaReason 
 import { MAIN_FARMER, SEASONS } from "./protocol.ts";
 import { seededRng, seedFrom } from "./rng.ts";
 import { emptyPlans, recordNight, type Night, type PlanState } from "./plan.ts";
-import { applyNight, emptyTown, type TownState } from "./town.ts";
+import { isPrivateScene, sceneLine } from "./scenes.ts";
+import { applyNight, emptyTown, renameFarmer, type TownState } from "./town.ts";
 import type { World } from "./validate.ts";
 
 export const MAX_ENTRIES = 14;
@@ -75,6 +76,9 @@ export type NpcMemoryV1 = {
   entries: { date: string; text: string }[];
 };
 
+// Leads a private scene's line in an actor's memory (scenes.ts PRIVATE_SCENES).
+export const PRIVATE_MARK = "(Private, I keep this to myself)";
+
 export type Role = "participant" | "witness";
 export type Witnessed = { event: DayEvent; role: Role };
 
@@ -119,7 +123,15 @@ const CHAT_LINES: Record<VanillaReason, string> = {
 // One line per event, from this NPC's point of view. A witness sees that a talk happened but
 // did not hear it, and sees a gift handed over but not how the receiver felt about it.
 // The key collapses repeats: a witness saw one conversation, not one per turn.
-function describe(e: DayEvent, role: Role, player: string): { key: string; line: string } {
+// festival: the calendar name of today's festival, when the world snapshot has one (scenes.ts).
+function describe(e: DayEvent, role: Role, player: string, npc: string, festival: string | undefined): { key: string; line: string } {
+  // Every actor in a scene took part in it, and each tells it from its own side.
+  if (e.type === "scene") {
+    const line = sceneLine(e, npc, player, festival);
+    // The mark leads the line, so it survives when the day is cut to its first sentence for the
+    // season summary.
+    return { key: `s:${e.eventId}`, line: isPrivateScene(e.eventId) ? `${PRIVATE_MARK} ${line}` : line };
+  }
   // Everyone in a happening was part of it, so the one the player spoke to and the others
   // remember the join the same way.
   if (e.type === "join") {
@@ -156,7 +168,8 @@ export function shareByNpc(events: DayEvent[]): Map<string, Witnessed[]> {
   };
   for (const event of events) {
     add(event.npc, { event, role: "participant" });
-    for (const w of event.witnesses) add(w, { event, role: "witness" });
+    // A scene's witnesses are its other actors: they were in it, not watching it.
+    for (const w of event.witnesses) add(w, { event, role: event.type === "scene" ? "participant" : "witness" });
   }
   return byNpc;
 }
@@ -262,16 +275,17 @@ export function fitToBudget(mem: NpcMemory): NpcMemory {
 
 // Pure: folds one day's share for one farmer into that farmer's section. `farmer` is the name
 // the lines use.
-function applySection(sec: FarmerMemory, day: DayRef, share: Witnessed[], farmer: string): FarmerMemory {
+function applySection(sec: FarmerMemory, day: DayRef, share: Witnessed[], farmer: string, npc: string, festival: string | undefined): FarmerMemory {
   const seen = new Set<string>();
   const lines: string[] = [];
   for (const { event, role } of share) {
-    const { key, line } = describe(event, role, farmer);
+    const { key, line } = describe(event, role, farmer, npc, festival);
     if (seen.has(key)) continue;
     seen.add(key);
     lines.push(line);
   }
-  const own = share.filter((w) => w.role === "participant").map((w) => w.event);
+  // Being in a scene the farmer watched is not meeting them.
+  const own = share.filter((w) => w.role === "participant" && w.event.type !== "scene").map((w) => w.event);
   let next: FarmerMemory = {
     ...sec,
     farmerName: farmer,
@@ -287,7 +301,15 @@ function applySection(sec: FarmerMemory, day: DayRef, share: Witnessed[], farmer
 // Pure: folds one day's share of events for one NPC into that NPC's memory. Each event lands in
 // the section of the farmer it happened with. An event without farmerId is the main farmer's:
 // it goes to hostKey (see farmerKey) and its lines use `player`, the day's playerName.
-export function applyDay(mem: NpcMemory, day: DayRef, share: Witnessed[], player: string, hostKey: string = MAIN_FARMER): NpcMemory {
+// festival: today's festival name from the world snapshot, for festival scene lines.
+export function applyDay(
+  mem: NpcMemory,
+  day: DayRef,
+  share: Witnessed[],
+  player: string,
+  hostKey: string = MAIN_FARMER,
+  festival?: string,
+): NpcMemory {
   if (share.length === 0) return mem;
   const byFarmer = new Map<string, { name: string; list: Witnessed[] }>();
   for (const w of share) {
@@ -297,7 +319,7 @@ export function applyDay(mem: NpcMemory, day: DayRef, share: Witnessed[], player
     byFarmer.set(key, group);
   }
   const farmers = { ...mem.farmers };
-  for (const [key, { name, list }] of byFarmer) farmers[key] = applySection(farmers[key] ?? emptySection(name), day, list, name);
+  for (const [key, { name, list }] of byFarmer) farmers[key] = applySection(farmers[key] ?? emptySection(name), day, list, name, mem.npc, festival);
   return fitToBudget({ ...mem, farmers });
 }
 
@@ -332,6 +354,12 @@ type HostFile = { version: 1; hostFarmerId: string };
 
 export type PendingDay = Omit<DayEndRequest, "v">;
 export type CommitResult = { outcome: "committed" | "nothing-pending" | "stale-discarded"; committed: string[] };
+
+// The calendar name of the festival on this date, from the world snapshot. Undefined when the
+// bridge has sent no snapshot yet or there is no festival that day.
+export function festivalOn(world: World | null, d: DayRef): string | undefined {
+  return world?.festivals.find((f) => f.season === d.season && f.day === d.day)?.name;
+}
 
 export function dayKey(d: DayRef): number {
   return (d.year - 1) * 112 + SEASONS.indexOf(d.season) * 28 + (d.day - 1);
@@ -474,6 +502,10 @@ export class MemoryStore {
         await this.save(saveId, { ...mem, farmers: { ...others, [hostId]: main } });
         moved.push(mem.npc);
       }
+      // Town facts about the single-player farmer are about the host too.
+      const town = await this.loadTown(saveId);
+      const renamed = renameFarmer(town, MAIN_FARMER, hostId);
+      if (renamed !== town) await this.saveTown(saveId, renamed);
       await this.writeJson(saveId, this.hostPath(saveId), { version: 1, hostFarmerId: hostId } satisfies HostFile);
       return { moved, kept };
     });
@@ -506,13 +538,14 @@ export class MemoryStore {
       }
       const share = shareByNpc(p.events);
       const hostKey = await this.hostKey(saveId);
+      const festival = festivalOn(await this.loadWorld(saveId), p.day);
       for (const [npc, list] of share) {
-        await this.save(saveId, applyDay(await this.load(saveId, npc), p.day, list, p.playerName, hostKey));
+        await this.save(saveId, applyDay(await this.load(saveId, npc), p.day, list, p.playerName, hostKey, festival));
       }
       // The night's dice are seeded by save and date, so replaying a save replays its gossip.
       const rng = seededRng(seedFrom(`${saveId}:${dayKey(p.day)}`));
       const planned = (await this.loadPlans(saveId)).nights.find((n) => dayKey(n.day) === dayKey(p.day));
-      await this.saveTown(saveId, applyNight(await this.loadTown(saveId), p, rng, planned?.relationships ?? []));
+      await this.saveTown(saveId, applyNight(await this.loadTown(saveId), p, rng, planned?.relationships ?? [], hostKey, festival));
       await rm(this.pendingPath(saveId));
       return { outcome: "committed", committed: [...share.keys()] };
     });

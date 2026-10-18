@@ -13,9 +13,10 @@
 
 import { pairKey } from "./cast.ts";
 import { band, isRoster, PASS_CHANCE, seedRelationships, seedScore, type Band } from "./graph.ts";
-import { dateLabel, dayKey, type PendingDay } from "./memory.ts";
-import type { DayEvent, DayRef, RelationshipShift } from "./protocol.ts";
+import { dateLabel, dayKey, farmerKey, type PendingDay } from "./memory.ts";
+import { MAIN_FARMER, type DayEvent, type DayRef, type RelationshipShift } from "./protocol.ts";
 import type { Rng } from "./rng.ts";
+import { actorsOf, isPrivateScene, sceneFactText } from "./scenes.ts";
 
 export const MAX_HOPS = 3;
 export const MAX_FACTS = 400;
@@ -42,8 +43,6 @@ export const DRIFT_GAIN = 1;
 export const DRIFT_MAX_GAINS = 3;
 export const DRIFT_WINDOW = 7;
 export const APART_DAYS = 28;
-// The farmer key for an event with no farmerId: the single-player main farmer (spec-v2 section 2).
-export const MAIN_FARMER = "main";
 
 export type FactSource = { kind: "saw" } | { kind: "told" } | { kind: "heard"; from: string };
 
@@ -166,24 +165,21 @@ export function newFact(
   return { id, created, shareable, knowers: k, about: [...about], ...(place !== undefined ? { place } : {}) };
 }
 
-// The farmer an event is about. DayEvent gains farmerId in slice A (spec-v2 section 2); until that
-// merges the field is read past the protocol type. No farmerId means the main farmer.
-function farmerOf(e: DayEvent): string {
-  const id = (e as { farmerId?: unknown }).farmerId;
-  return typeof id === "string" && id.length > 0 ? id : MAIN_FARMER;
-}
-
 // Facts a committed day creates, in event order, at most MAX_NEW_FACTS_PER_DAY:
-//   gift  a public act: the receiver and everyone who saw it know, and may pass it on
-//   join  the farmer joined a happening: every participant saw it, and may pass it on
-//   talk  only when the picked reply carried a fact (a promise): the villager spoken to was told
-//         it; witnesses saw a conversation but did not hear it. In confidence means not shareable.
+//   gift   a public act: the receiver and everyone who saw it know, and may pass it on
+//   join   the farmer joined a happening: every participant saw it, and may pass it on
+//   talk   only when the picked reply carried a fact (a promise): the villager spoken to was told
+//          it; witnesses saw a conversation but did not hear it. In confidence means not shareable.
+//   scene  one of the game's scripted events: every actor saw it; shareable unless the scene is
+//          private (scenes.ts). Told from outside, so gossip never carries an actor's own view.
 // Other talk, and a vanilla chat, makes no fact; what was said lives in that villager's memory.
-export function factsFromDay(day: PendingDay): Fact[] {
+// Each fact is about the event's farmer; an event without farmerId is the host's (hostKey, as
+// memory.ts farmerKey). festival: today's festival name, for festival scenes.
+export function factsFromDay(day: PendingDay, hostKey: string = MAIN_FARMER, festival?: string): Fact[] {
   const facts: Fact[] = [];
   const add = (e: DayEvent, text: string, shareable: boolean, knowers: Record<string, FactSource>) => {
     if (facts.length < MAX_NEW_FACTS_PER_DAY) {
-      facts.push(newFact(`${dayKey(day.day)}-${facts.length}`, day.day, text, shareable, knowers, [farmerOf(e)], e.location));
+      facts.push(newFact(`${dayKey(day.day)}-${facts.length}`, day.day, text, shareable, knowers, [farmerKey(e, hostKey)], e.location));
     }
   };
   const sawIt = (npc: string, witnesses: string[]): Record<string, FactSource> =>
@@ -192,8 +188,21 @@ export function factsFromDay(day: PendingDay): Fact[] {
     if (e.type === "gift") add(e, `${day.playerName} gave ${e.npc} ${e.item} at ${e.location}.`, true, sawIt(e.npc, e.witnesses));
     else if (e.type === "join") add(e, `${day.playerName} joined in at ${e.location}: ${e.topic}.`, true, sawIt(e.npc, e.witnesses));
     else if (e.type === "talk" && e.fact !== undefined) add(e, e.fact.text, e.fact.shareable, { [e.npc]: { kind: "told" } });
+    else if (e.type === "scene") {
+      add(e, sceneFactText(e, e.farmerName ?? day.playerName, festival), !isPrivateScene(e.eventId), sawIt(e.npc, actorsOf(e).slice(1)));
+    }
   }
   return facts;
+}
+
+// A world request named the host: facts about MAIN_FARMER are about the host from now on, as the
+// memory sections are (memory.ts setHost). Pure; returns the town unchanged when none are.
+export function renameFarmer(town: TownState, from: string, to: string): TownState {
+  if (!town.facts.some((f) => f.about?.includes(from))) return town;
+  const facts = town.facts.map((f) =>
+    f.about?.includes(from) ? { ...f, about: [...new Set(f.about.map((id) => (id === from ? to : id)))] } : f,
+  );
+  return { ...town, facts };
 }
 
 // Roster pairs who spent time in the same place today: an event's npc with its witnesses, and
@@ -290,7 +299,15 @@ export function driftNight(
 // shifts are the relationship changes the planner set for this day; they land with the day, so a
 // day that is never saved never moves a relationship. The night's hops and relationship changes
 // are kept in lastNightLog for the diary.
-export function applyNight(town: TownState, day: PendingDay, rng: Rng, shifts: readonly RelationshipShift[] = []): TownState {
+// hostKey and festival are passed to factsFromDay.
+export function applyNight(
+  town: TownState,
+  day: PendingDay,
+  rng: Rng,
+  shifts: readonly RelationshipShift[] = [],
+  hostKey: string = MAIN_FARMER,
+  festival?: string,
+): TownState {
   const key = dayKey(day.day);
   if (town.lastNight === key) return town;
   const before = { ...seedRelationships(), ...town.relationships };
@@ -303,7 +320,7 @@ export function applyNight(town: TownState, day: PendingDay, rng: Rng, shifts: r
     ties[k] = { last: key, gains: ties[k]?.gains ?? [], back: 0 };
     why.set(k, ["planner"]);
   }
-  const withNew: TownState = { ...town, relationships, facts: [...town.facts, ...factsFromDay(day)] };
+  const withNew: TownState = { ...town, relationships, facts: [...town.facts, ...factsFromDay(day, hostKey, festival)] };
   const pairs = pairsTogether(day);
   const gossip = gossipNight(withNew, day.day, pairs, rng);
   const drift = driftNight(relationships, ties, key, pairs);

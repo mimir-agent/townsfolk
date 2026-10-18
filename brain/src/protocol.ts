@@ -85,7 +85,13 @@ export type DayEvent =
   | (EventBase & { type: "join"; topic: string })
   // The game's own dialogue answered this click, not ours (first meeting, a quest, a birthday,
   // story dialogue). Recorded so memory knows they talked; the game's words are not sent.
-  | (EventBase & { type: "chat"; reason: VanillaReason });
+  | (EventBase & { type: "chat"; reason: VanillaReason })
+  // One of the game's own scripted events (cutscene, heart event, festival) the farmer watched,
+  // recorded read-only once it ended (mod/SceneWatcher.cs). npc is the first villager actor and
+  // witnesses are the other villager actors: every one of them took part (scenes.ts).
+  | (EventBase & { type: "scene"; eventId: string; festival: boolean });
+
+export type SceneEvent = Extract<DayEvent, { type: "scene" }>;
 
 export const VANILLA_REASONS = ["first-meeting", "quest", "birthday", "story"] as const;
 export type VanillaReason = (typeof VANILLA_REASONS)[number];
@@ -371,7 +377,11 @@ export function parseDayEnd(v: unknown): DayEndRequest {
       if (!VANILLA_REASONS.includes(o.reason as VanillaReason)) throw new BadRequest(`events[${i}].reason must be one of ${VANILLA_REASONS.join(", ")}`);
       return { type: "chat", ...base, reason: o.reason as VanillaReason };
     }
-    throw new BadRequest(`events[${i}].type must be talk, gift, join or chat`);
+    if (o.type === "scene") {
+      if (typeof o.festival !== "boolean") throw new BadRequest(`events[${i}].festival must be a boolean`);
+      return { type: "scene", ...base, eventId: eventId(o.eventId, `events[${i}].eventId`), festival: o.festival };
+    }
+    throw new BadRequest(`events[${i}].type must be talk, gift, join, chat or scene`);
   });
   const together = parseTogether(b.together);
   return { v: 1, saveId: name(b.saveId, "saveId"), playerName: str(b.playerName, "playerName", 40), day: parseDay(b.day), events, ...(together ? { together } : {}) };
@@ -442,12 +452,14 @@ function parseFarmers(v: unknown): PlanFarmer[] | undefined {
 // Event ids the player has seen. Duplicates are dropped; order does not matter.
 function parseEventsSeen(v: unknown): string[] {
   if (v === undefined || v === null) return [];
-  const ids = list(v, "eventsSeen", MAX_EVENTS_SEEN).map((id, i) => {
-    const s = str(id, `eventsSeen[${i}]`, 60);
-    if (!EVENT_ID.test(s)) throw new BadRequest(`eventsSeen[${i}] has characters outside A-Z a-z 0-9 _ . -`);
-    return s;
-  });
+  const ids = list(v, "eventsSeen", MAX_EVENTS_SEEN).map((id, i) => eventId(id, `eventsSeen[${i}]`));
   return [...new Set(ids)];
+}
+
+function eventId(v: unknown, where: string): string {
+  const s = str(v, where, 60);
+  if (!EVENT_ID.test(s)) throw new BadRequest(`${where} has characters outside A-Z a-z 0-9 _ . -`);
+  return s;
 }
 
 // 0 to 14: 10 is the cap for a friend, 14 for a spouse.

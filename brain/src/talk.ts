@@ -8,7 +8,7 @@ import type { Choice, GameStats, Happening, HappeningView, TalkFact, TalkRequest
 import { MAIN_FARMER } from "./protocol.ts";
 import { describeStats, statsFor } from "./stats.ts";
 import { storyFor } from "./story.ts";
-import { knownFactLines, type TownState } from "./town.ts";
+import { knownFactLines, type FarmerView, type TownState } from "./town.ts";
 import { talkCard, tierFor } from "./voices.ts";
 
 export const MAX_TURNS = 3;
@@ -54,9 +54,11 @@ export function joinOffer(req: TalkRequest, ctx: TalkContext, mustEnd: boolean):
 // The parts of a prompt that depend on what this NPC knows beyond its own memory: the game's
 // scenes it was in (story.ts), the stats it may know and the facts it holds. Every prompt built
 // for an NPC (talk and plan) goes through here, so the knowledge boundary is enforced in one place.
-export function knowledgeBlock(npc: string, stats: GameStats, town: TownState, eventsSeen: readonly string[]): string {
+// view: the talking farmer, so each fact line says whom it is about ("about you" or "about <name>").
+// The planner passes none and its lines name no farmer.
+export function knowledgeBlock(npc: string, stats: GameStats, town: TownState, eventsSeen: readonly string[], view?: FarmerView): string {
   const statLines = describeStats(statsFor(npc, stats));
-  const factLines = knownFactLines(town, npc);
+  const factLines = knownFactLines(town, npc, view);
   const story = storyFor(npc, eventsSeen);
   return [
     story.length > 0
@@ -106,6 +108,14 @@ export function otherFarmerLine(sec: FarmerMemory): string {
   return `- ${name}: ${sec.talks} ${sec.talks === 1 ? "talk" : "talks"}${last ? `, last seen ${last}` : ""}.${summary}`;
 }
 
+// The talking farmer and the names this NPC knows other farmers by (its own memory sections).
+// A farmer it has no section for shows as "another farmer".
+export function farmerView(key: string, who: string, mem: NpcMemory): FarmerView {
+  const names: Record<string, string> = {};
+  for (const [id, sec] of Object.entries(mem.farmers)) if (sec.farmerName) names[id] = sec.farmerName;
+  return { farmerId: key, names: { ...names, [key]: who } };
+}
+
 export function buildPrompt(
   req: TalkRequest,
   mem: NpcMemory,
@@ -145,7 +155,7 @@ export function buildPrompt(
     others.length > 0
       ? `Other farmers ${req.npc} knows (each has their own history with ${req.npc}; ${req.npc} may mention them by name, but nothing above happened with them and nothing here happened with ${who}):\n${others.map(([, s]) => otherFarmerLine(s)).join("\n")}`
       : "",
-    knowledgeBlock(req.npc, req.stats, town, req.eventsSeen),
+    knowledgeBlock(req.npc, req.stats, town, req.eventsSeen, farmerView(key, who, mem)),
     todayBlock(req, ctx, offer),
     convo ? `Conversation so far:\n${convo}` : `${who} just walked up to start a conversation.`,
     req.recentChoice ? `${who} just said: "${req.recentChoice.text}". Respond to that.` : "",

@@ -19,7 +19,7 @@ public sealed record TalkRelayRequest(string RequestId, TalkRequest Request);
 /// <summary>townsfolk.talk.resp: the brain's reply, or null when there is none (the farmhand then runs vanilla).</summary>
 public sealed record TalkRelayResponse(string RequestId, TalkResponse? Response);
 
-/// <summary>townsfolk.event: one talk, gift, join or chat a farmhand made. The host stamps the sender's farmerId.</summary>
+/// <summary>townsfolk.event: one talk, gift, join, chat or scene a farmhand made or watched. The host stamps the sender's farmerId.</summary>
 public sealed record EventRelay(DayEvent Event);
 
 /// <summary>townsfolk.farmer.apply: the plan parts for Day that belong to one farmer, applied by that farmer's own game.</summary>
@@ -30,6 +30,10 @@ public sealed record PlanSplit(List<FriendshipShift> HostFriendship, MailQuest? 
 
 public static class RelayRules
 {
+    // "eventId" in protocol/common.schema.json.
+    private static readonly System.Text.RegularExpressions.Regex EventIdRule =
+        new(@"^[A-Za-z0-9_.-]{1,60}$", System.Text.RegularExpressions.RegexOptions.CultureInvariant);
+
     /// <summary>
     /// A farmhand's event checked against protocol/day-end-request.schema.json, because the brain
     /// refuses the whole day for one bad event. Null when it cannot be sent at all. Every name
@@ -46,6 +50,7 @@ public static class RelayRules
             "gift" => Fits(ev.Item, 80) && OptFits(ev.Taste, 20),
             "join" => Fits(ev.Topic, 120),
             "chat" => ev.Reason is "first-meeting" or "quest" or "birthday" or "story",
+            "scene" => ev.EventId is not null && EventIdRule.IsMatch(ev.EventId) && ev.Festival is not null,
             _ => false,
         };
         if (!known || ev.Npc is null || !isVillager(ev.Npc) || !Fits(ev.Location, 80) || ev.Time < 600 || ev.Time > 2600)
