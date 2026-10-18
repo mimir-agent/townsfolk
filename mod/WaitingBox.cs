@@ -17,10 +17,14 @@ namespace Townsfolk;
 public sealed class WaitingBox : IClickableMenu
 {
     private readonly NPC npc;
+    // The NPC's line once the brain has streamed it, before the choices; null until then. Read
+    // on every draw, set on the thread pool (Conversation.EarlyLine).
+    private readonly Func<string?> line;
 
-    public WaitingBox(NPC npc)
+    public WaitingBox(NPC npc, Func<string?> line)
     {
         this.npc = npc;
+        this.line = line;
     }
 
     /// <summary>True once the player closed the box themselves (Escape or back).</summary>
@@ -68,7 +72,19 @@ public sealed class WaitingBox : IClickableMenu
         int textX = x + 40 + portrait + 40;
         Utility.drawTextWithShadow(b, this.npc.displayName, Game1.dialogueFont, new Vector2(textX, y + 48), Game1.textColor);
         string dots = new('.', TalkWait.DotsAt(Environment.TickCount64));
-        Utility.drawTextWithShadow(b, dots, Game1.dialogueFont, new Vector2(textX, y + 48 + 96), Game1.textColor);
+        // The line is shown as soon as it is written; the dots stay under it while the choices load.
+        if (this.line() is { } said)
+        {
+            int textWidth = x + width - textX - 48;
+            string wrapped = Game1.parseText(said, Game1.smallFont, textWidth);
+            Utility.drawTextWithShadow(b, wrapped, Game1.smallFont, new Vector2(textX, y + 48 + 72), Game1.textColor);
+            Vector2 size = Game1.smallFont.MeasureString(wrapped);
+            Utility.drawTextWithShadow(b, dots, Game1.smallFont, new Vector2(textX, y + 48 + 72 + size.Y + 8), Game1.textColor);
+        }
+        else
+        {
+            Utility.drawTextWithShadow(b, dots, Game1.dialogueFont, new Vector2(textX, y + 48 + 96), Game1.textColor);
+        }
         this.drawMouse(b);
     }
 }

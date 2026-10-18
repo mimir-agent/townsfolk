@@ -69,6 +69,11 @@ export type Choice = { id: string; text: string; delta: number; fact?: TalkFact;
 // The happening a join choice is about, as the bridge needs it to report the join.
 export type HappeningView = { location: string; topic: string; participants: string[] };
 
+// The first line of a streamed talk (protocol/talk-partial.schema.json): the NPC's line, already
+// cleaned and fitted, sent before the choices exist. The whole TalkResponse follows on the next
+// line, and its line wins if the two differ (a retry after a failed first attempt).
+export type TalkPartial = { v: 1; partial: true; line: string };
+
 export type TalkResponse = {
   v: 1;
   line: string;

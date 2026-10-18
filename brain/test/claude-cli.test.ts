@@ -7,7 +7,7 @@ import { chmod, mkdtemp, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { test } from "node:test";
-import { claudeCliAdapter } from "../src/model.ts";
+import { claudeCliAdapter, type ModelEvent } from "../src/model.ts";
 
 const skip = process.platform === "win32";
 
@@ -35,18 +35,57 @@ process.stdin.setEncoding("utf8").on("data", (d) => {
       continue;
     }
     memory.push(text);
-    console.log(JSON.stringify({ type: "result", subtype: "success", is_error: false, result: [process.pid, system, ...memory].join("|") }));
+    const result = [process.pid, system, ...memory].join("|");
+    // With --include-partial-messages the real CLI streams the reply in text deltas first.
+    if (args.includes("--include-partial-messages")) {
+      for (let i = 0; i < result.length; i += 5) {
+        console.log(JSON.stringify({ type: "stream_event", event: { type: "content_block_delta", index: 0, delta: { type: "text_delta", text: result.slice(i, i + 5) } } }));
+      }
+    }
+    const thinkingOff = process.env.CLAUDE_CODE_DISABLE_THINKING === "1" && process.env.CLAUDE_CODE_DISABLE_ADAPTIVE_THINKING === "1" && process.env.CLAUDE_CODE_EFFORT_LEVEL === "low";
+    console.log(JSON.stringify({ type: "result", subtype: "success", is_error: false, result, usage: { input_tokens: 2, cache_read_input_tokens: 100, cache_creation_input_tokens: 0, output_tokens: 9, output_tokens_details: { thinking_tokens: thinkingOff ? 0 : 50 } } }));
   }
 });
 `;
 
-async function fakeModel() {
+async function fakeModel(quick = false) {
   const dir = await mkdtemp(join(tmpdir(), "townsfolk-fake-claude-"));
   const bin = join(dir, "claude");
   await writeFile(bin, FAKE);
   await chmod(bin, 0o755);
-  return claudeCliAdapter({ command: { file: bin, viaCmd: false }, model: "haiku" });
+  return claudeCliAdapter({ command: { file: bin, viaCmd: false }, model: "haiku", quick });
 }
+
+test("claude-cli streams the reply as it is written, and reports usage; /clear's events never reach a call", { skip }, async () => {
+  const model = await fakeModel(true);
+  try {
+    await model.complete("SYS", "first", sig(), undefined, { session: "S" });
+    const events: ModelEvent[] = [];
+    const reply = await model.complete("SYS", "second", sig(), undefined, { session: "S", onEvent: (e) => events.push(e) });
+    assert.equal(events[0]?.kind, "sent", "sent comes first, after the /clear finished");
+    const texts = events.flatMap((e) => (e.kind === "text" ? [e.text] : []));
+    assert.ok(texts.length > 2, "more than one partial");
+    assert.equal(texts.at(-1), reply, "the last partial is the whole reply");
+    for (let i = 1; i < texts.length; i++) assert.ok(texts[i]!.startsWith(texts[i - 1]!), "each partial extends the one before");
+    assert.ok(texts.every((t) => !t.includes("first")), "nothing from before the /clear");
+    const usage = events.find((e) => e.kind === "usage");
+    assert.deepEqual(usage, { kind: "usage", input: 2, cacheRead: 100, cacheWrite: 0, output: 9, thinking: 0 }, "talk runs with thinking off");
+  } finally {
+    model.close?.();
+  }
+});
+
+test("claude-cli without quick (the plan) keeps the model's own thinking", { skip }, async () => {
+  const model = await fakeModel(false);
+  try {
+    const events: ModelEvent[] = [];
+    await model.complete("SYS", "plan", sig(), undefined, { session: "plan", onEvent: (e) => events.push(e) });
+    const usage = events.find((e) => e.kind === "usage");
+    assert.equal(usage?.kind === "usage" ? usage.thinking : -1, 50);
+  } finally {
+    model.close?.();
+  }
+});
 
 const sig = () => AbortSignal.timeout(10_000);
 

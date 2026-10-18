@@ -20,6 +20,7 @@ import {
   type HealthResponse,
   type PlanResponse,
   type SavedResponse,
+  type TalkPartial,
   type TalkResponse,
   type WorldResponse,
 } from "./protocol.ts";
@@ -41,6 +42,13 @@ export type BrainDeps = {
 };
 
 const MAX_BODY = 256 * 1024;
+
+// POST /v1/talk with this in Accept streams (protocol/README.md, "Streamed talk").
+export const NDJSON = "application/x-ndjson";
+
+function wantsStream(req: IncomingMessage): boolean {
+  return (req.headers.accept ?? "").split(",").some((t) => t.trim().split(";")[0] === NDJSON);
+}
 
 async function readJson(req: IncomingMessage): Promise<unknown> {
   let size = 0;
@@ -79,12 +87,31 @@ export function createBrain(deps: BrainDeps): Server {
         const town = await deps.store.loadTown(body.saveId);
         const ctx = todayFor(await deps.store.loadPlans(body.saveId), body.npc, body.day);
         const hostKey = await deps.store.hostKey(body.saveId);
-        const reply = await talk(body, mem, town, ctx, deps.model, { deadlineMs: deps.talkDeadlineMs, log: deps.log, hostKey });
+        const loaded = Date.now() - started;
+        // A caller that accepts NDJSON gets the NPC's line on its own first, the moment it is
+        // written, then the whole reply. Headers go out with that first line, so everything that
+        // can fail with a 4xx has already run.
+        const streaming = wantsStream(req);
+        let lineAt = -1;
+        const onLine = streaming
+          ? (line: string) => {
+              lineAt = Date.now() - started;
+              res.writeHead(200, { "content-type": NDJSON });
+              res.write(JSON.stringify({ v: 1, partial: true, line } satisfies TalkPartial) + "\n");
+            }
+          : undefined;
+        const reply = await talk(body, mem, town, ctx, deps.model, { deadlineMs: deps.talkDeadlineMs, log: deps.log, hostKey, onLine });
+        const total = Date.now() - started;
+        const phases = `load ${loaded}ms, line sent ${lineAt}ms`;
         deps.log(
           reply.source === "fallback"
-            ? `talk ${body.npc} FAILED after ${Date.now() - started}ms, vanilla or canned line instead: ${reply.reason}`
-            : `talk ${body.npc} ${reply.source} ${Date.now() - started}ms end=${reply.end} join=${reply.happening ? "offered" : "no"}`,
+            ? `talk ${body.npc} FAILED after ${total}ms (${phases}), vanilla or canned line instead: ${reply.reason}`
+            : `talk ${body.npc} ${reply.source} ${total}ms (${phases}) end=${reply.end} join=${reply.happening ? "offered" : "no"}`,
         );
+        if (res.headersSent) {
+          res.end(JSON.stringify(reply) + "\n");
+          return;
+        }
         return send(res, 200, reply);
       }
       if (req.method === "POST" && req.url === "/v1/day-end") {
@@ -140,6 +167,12 @@ export function createBrain(deps: BrainDeps): Server {
       }
       return send(res, 404, { v: 1, error: "not found" });
     } catch (err) {
+      // A streamed talk already sent its status; the caller sees the body end without a reply.
+      if (res.headersSent) {
+        deps.log(`streamed ${req.url} failed after its first line: ${(err as Error).stack ?? String(err)}`);
+        res.end();
+        return;
+      }
       if (err instanceof BadRequest) return send(res, 400, { v: 1, error: err.message });
       if (err instanceof NotReady) return send(res, 409, { v: 1, error: err.message });
       deps.log(`500 ${req.method} ${req.url}: ${(err as Error).stack ?? String(err)}`);

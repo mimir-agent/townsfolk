@@ -64,6 +64,7 @@ test("every schema in protocol/ compiles and is used by an endpoint", () => {
     "plan-response",
     "saved-request",
     "saved-response",
+    "talk-partial",
     "talk-request",
     "talk-response",
     "world-request",

@@ -21,7 +21,8 @@ import { createBrain } from "./server.ts";
 
 const env = process.env;
 
-// talk: Haiku, one warm process per player. plan: Sonnet, used only by /v1/plan.
+// talk: Haiku, one warm process per player, thinking off (model.ts QUICK_ENV). plan: Sonnet,
+// used only by /v1/plan, with the model's own thinking.
 // claude: the command the claude-cli adapters run, checked at start (claude-check.ts).
 // notFound: Windows found no claude.exe/.cmd/.bat on PATH. The brain still starts so the mod can
 // show why; the bare name is kept, so every talk fails with ENOENT and says so.
@@ -39,7 +40,7 @@ function pickModels(): { talk: ModelAdapter; plan: ModelAdapter; claude?: Comman
     }
     return {
       ...(notFound !== undefined ? { notFound } : {}),
-      talk: claudeCliAdapter({ command, model: env.TOWNSFOLK_CLAUDE_MODEL ?? "haiku" }),
+      talk: claudeCliAdapter({ command, model: env.TOWNSFOLK_CLAUDE_MODEL ?? "haiku", quick: true }),
       plan: claudeCliAdapter({ command, model: env.TOWNSFOLK_PLAN_MODEL ?? "sonnet" }),
       claude: command,
     };

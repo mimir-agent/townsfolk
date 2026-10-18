@@ -1,7 +1,7 @@
 {
   "Name": "Townsfolk",
   "Author": "mimir-agent",
-  "Version": "0.1.2",
+  "Version": "0.1.3",
   "Description": "Claude-written conversations with picked replies and per-character memory. Needs the townsfolk brain running on this machine.",
   "UniqueID": "mimir-agent.Townsfolk",
   "EntryDll": "Townsfolk.dll",
