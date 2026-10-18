@@ -16,8 +16,8 @@ test("valid model reply passes through with 3 choices", async () => {
   const r = await talk(req(), emptyMemory("Abigail"), emptyTown(), NO_CONTEXT, fakeAdapter([DEFAULT_FAKE_REPLY]), quiet);
   assertValid("talk-response", r);
   assert.equal(r.source, "model");
-  assert.equal(r.choices.length, 3);
-  assert.deepEqual(r.choices.map((c) => c.id), ["a", "b", "c"]);
+  assert.equal(r.choices.length, 4, "three from the model plus the brain's goodbye");
+  assert.deepEqual(r.choices.map((c) => c.id), ["a", "b", "c", "d"]);
   assert.equal(r.end, false);
 });
 
@@ -112,7 +112,7 @@ test("HTTP: talk round trip, then day-end and saved write memory that the next d
 
     const first = await c.post("/v1/talk", req());
     assert.equal(first.status, 200);
-    assert.equal(first.json.choices.length, 3);
+    assert.equal(first.json.choices.length, 4);
 
     const end = await c.post(
       "/v1/day-end",

@@ -152,6 +152,10 @@ function describe(e: DayEvent, role: Role, player: string, npc: string, festival
     const line = `${player} and I ${CHAT_LINES[e.reason]} at ${e.location}, ${clock(e.time)}.`;
     return { key: line, line };
   }
+  if (e.type === "said") {
+    const line = `At ${e.location}, ${clock(e.time)}, I said (game line) to ${player}: "${e.line}"`;
+    return { key: line, line };
+  }
   const reply = e.playerChoice ? ` ${player} answered: "${e.playerChoice}".` : "";
   const fact = e.fact ? ` I will remember: ${e.fact.text}${e.fact.shareable ? "" : " (told in confidence)"}` : "";
   const line = `At ${e.location}, ${clock(e.time)}, I said: "${e.npcLine}".${reply}${fact}`;

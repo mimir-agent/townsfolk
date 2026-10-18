@@ -142,11 +142,11 @@ export async function runSim(opts: SimOptions): Promise<SimResult> {
   let modelCalls = 0;
   const model: ModelAdapter = {
     name: inner.name,
-    complete(system, user, signal, maxTokens) {
+    complete(system, user, signal, maxTokens, o) {
       modelCalls++;
       const leak = canaryLeak(system, user);
       if (leak !== null) leaks.push(leak);
-      return inner.complete(system, user, signal, maxTokens);
+      return inner.complete(system, user, signal, maxTokens, o);
     },
   };
   const brainLog: string[] = [];

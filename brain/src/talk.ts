@@ -30,12 +30,12 @@ export const JOIN_TEXT = "Mind if I join in?";
 export type TalkContext = { goal: { text: string; progress: number } | null; happening: Happening | null };
 export const NO_CONTEXT: TalkContext = { goal: null, happening: null };
 
-const SYSTEM = `You write dialogue for one character in Stardew Valley's Pelican Town.
+export const TALK_SYSTEM = `You write dialogue for one character in Stardew Valley's Pelican Town.
 Reply with ONE JSON object and nothing else: no prose, no markdown fences.
 Shape: {"line": string, "choices": [{"id": string, "text": string, "delta": number, "fact": {"text": string, "shareable": boolean}}], "end": boolean}
 Rules:
 - "line" is what the character says now: 1 to 3 short sentences, at most ${LINE_MAX} characters, in their voice. No stage directions, no quotation marks around it, no "$" or "#" characters.
-- If "end" is false, give 3 or 4 "choices": things the player could say back, each a short phrase of at most ${CHOICE_ASK} characters, clearly different in tone (for example warm, playful, curious, blunt). ids are "a", "b", "c", "d".
+- If "end" is false, give 3 "choices": things the player could say back, each a short phrase of at most ${CHOICE_ASK} characters, clearly different in tone (for example warm, playful, curious, blunt). ids are "a", "b", "c". Never write a goodbye or leave-taking choice: the game adds one itself.
 - Each choice has "delta": how much the character's friendship with the player changes if the player says it, a whole number from -${CHOICE_DELTA_MAX} to ${CHOICE_DELTA_MAX}. Most replies are -5 to 5; save the extremes for replies that really land or really hurt.
 - A choice may have "fact": something the character will remember if the player says it, written from the character's side in at most ${FACT_MAX} characters, for example a promise the player makes ("The farmer promised to bring me a cave carrot by Friday."). "shareable" is false when the player is saying it in confidence. Leave "fact" out for small talk.
 - If "end" is true the conversation closes after this line and "choices" is [].
@@ -145,6 +145,7 @@ export function buildPrompt(
           .filter(Boolean)
           .join("\n");
   const others = Object.entries(mem.farmers).filter(([k]) => k !== key);
+  const gameLines = req.gameLines ?? [];
   const convo = req.transcript.map((t) => `${t.speaker === "npc" ? req.npc : who}: ${t.text}`).join("\n");
   const user = [
     `Character: ${req.npc}`,
@@ -157,13 +158,17 @@ export function buildPrompt(
       : "",
     knowledgeBlock(req.npc, req.stats, town, req.eventsSeen, farmerView(key, who, mem)),
     todayBlock(req, ctx, offer),
+    gameLines.length > 0
+      ? `Lines the game itself already had ${req.npc} say to ${who} today (${who} heard them; stay consistent with them and do not repeat them):\n${gameLines.map((l) => `- ${l}`).join("\n")}`
+      : "",
     convo ? `Conversation so far:\n${convo}` : `${who} just walked up to start a conversation.`,
+    convo && !req.recentChoice ? `${who} walked away mid-conversation and has come back to it. Pick up where it left off.` : "",
     req.recentChoice ? `${who} just said: "${req.recentChoice.text}". Respond to that.` : "",
     mustEnd ? `This is the last turn: set "end" to true and close the conversation naturally.` : "",
   ]
     .filter(Boolean)
     .join("\n\n");
-  return { system: SYSTEM, user };
+  return { system: TALK_SYSTEM, user };
 }
 
 // The game's dialogue engine treats some characters as commands, so they are stripped here.
@@ -269,6 +274,39 @@ export function fallback(req: TalkRequest, mustEnd: boolean): TalkResponse {
   return { v: 1, line: "Hm? Sorry, my mind was somewhere else. Good to see you.", choices: [], end: true, source: "fallback" };
 }
 
+// The way out. Every reply that is not the last one ends with this choice, written by the brain,
+// not the model. Which goodbye and which closing line are picked from a hash of who, when and
+// which turn, so the same turn always shows the same words.
+export const GOODBYES = ["I should get going.", "Catch you later.", "Take care!", "I'll let you get back to it."] as const;
+export const CLOSINGS = ["Take care of yourself.", "See you around.", "Come by anytime.", "Good talking to you."] as const;
+export const BYE_ID = "d";
+const MODEL_CHOICES = 3;
+
+function pickIndex(seed: string, n: number): number {
+  let h = 0;
+  for (const ch of seed) h = (h * 31 + ch.charCodeAt(0)) >>> 0;
+  return h % n;
+}
+
+// The model's choices cut to MODEL_CHOICES (the join choice is never the one cut), re-numbered
+// a, b, c, then the goodbye as d.
+function withGoodbye(choices: Choice[], req: TalkRequest, hostKey: string): Choice[] {
+  let kept = choices;
+  while (kept.length > MODEL_CHOICES) {
+    const cut = kept.findLastIndex((c) => c.join !== true);
+    kept = kept.filter((_, i) => i !== cut);
+  }
+  const ids = ["a", "b", "c"];
+  const seed = `${req.npc}|${farmerKey(req, hostKey)}|${req.day.season}${req.day.day}${req.day.year}|${playerTurns(req)}`;
+  const bye: Choice = { id: BYE_ID, text: GOODBYES[pickIndex(seed, GOODBYES.length)]!, delta: 0, bye: true, closing: CLOSINGS[pickIndex(`c${seed}`, CLOSINGS.length)]! };
+  return [...kept.map((c, i) => ({ ...c, id: ids[i]! })), bye];
+}
+
+// One warm model process per player on the host: the same player never shares one with another.
+export function talkSession(saveId: string, farmer: string): string {
+  return `talk|${saveId}|${farmer}`;
+}
+
 export function playerTurns(req: TalkRequest): number {
   return req.transcript.filter((t) => t.speaker === "player").length + (req.recentChoice ? 1 : 0);
 }
@@ -283,14 +321,19 @@ export async function talk(
 ): Promise<TalkResponse> {
   const mustEnd = playerTurns(req) >= MAX_TURNS;
   const offer = joinOffer(req, ctx, mustEnd);
-  const { system, user } = buildPrompt(req, mem, town, ctx, mustEnd, offer, opts.hostKey ?? MAIN_FARMER);
+  const hostKey = opts.hostKey ?? MAIN_FARMER;
+  const { system, user } = buildPrompt(req, mem, town, ctx, mustEnd, offer, hostKey);
+  const session = talkSession(req.saveId, farmerKey(req, hostKey));
   const deadline = Date.now() + opts.deadlineMs;
   for (let attempt = 1; attempt <= 2; attempt++) {
     const remaining = deadline - Date.now();
     if (remaining < 500) break;
     try {
-      const raw = await model.complete(system, user, AbortSignal.timeout(remaining));
-      return { v: 1, ...validateReply(raw, mustEnd, offer), source: "model" };
+      const t0 = Date.now();
+      const raw = await model.complete(system, user, AbortSignal.timeout(remaining), undefined, { session });
+      const reply = validateReply(raw, mustEnd, offer);
+      opts.log(`talk ${req.npc} model answered in ${Date.now() - t0}ms`);
+      return { v: 1, ...reply, choices: reply.end ? [] : withGoodbye(reply.choices, req, hostKey), source: "model" };
     } catch (err) {
       opts.log(`talk ${req.npc} attempt ${attempt} failed: ${(err as Error).message}`);
     }

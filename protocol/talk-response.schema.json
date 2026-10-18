@@ -25,7 +25,9 @@
             "description": "Friendship points the bridge adds for this NPC when the player picks this choice; the brain clamps the model's number into -15..15. On the join choice it is the brain's fixed join gain, added for every happening participant."
           },
           "fact": { "$ref": "common.schema.json#/$defs/talkFact" },
-          "join": { "const": true, "description": "Only on the one join choice, and only when happening is present." }
+          "join": { "const": true, "description": "Only on the one join choice, and only when happening is present." },
+          "bye": { "const": true, "description": "Only on the last choice of every reply that is not final: the brain's fixed goodbye. Picking it ends the conversation; the bridge shows closing and asks nothing more." },
+          "closing": { "type": "string", "minLength": 1, "maxLength": 80, "description": "The NPC's short parting line. Present exactly when bye is." }
         }
       }
     },

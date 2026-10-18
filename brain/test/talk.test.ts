@@ -268,7 +268,7 @@ test("a line a few characters over the cap is cut at its last sentence end insid
   assert.equal(r.source, "model");
   assert.equal(r.end, false);
   assert.equal(r.line, keep);
-  assert.equal(r.choices.length, 3);
+  assert.equal(r.choices.length, 4);
 });
 
 test("the NPC's own active goal reaches its talk prompt, and no one else's", async () => {

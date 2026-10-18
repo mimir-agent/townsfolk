@@ -33,6 +33,12 @@
         "money": { "type": "integer", "minimum": 0, "description": "Sent so the filter is tested against it. No NPC is allowed to know it." }
       }
     },
+    "gameLines": {
+      "type": "array",
+      "maxItems": 8,
+      "description": "What the game's own dialogue had this NPC say to this farmer today, oldest first, as shown. Optional.",
+      "items": { "type": "string", "minLength": 1, "maxLength": 400 }
+    },
     "transcript": {
       "type": "array",
       "maxItems": 12,
