@@ -16,6 +16,7 @@
       "properties": { "hearts": { "type": "number" }, "points": { "type": "number" } }
     },
     "recentChoice": { "$ref": "common.schema.json#/$defs/choice" },
+    "eventsSeen": { "$ref": "common.schema.json#/$defs/eventsSeen" },
     "joined": { "type": "boolean", "description": "True once the player has picked a join choice today; no further join choice is offered. Optional, default false." },
     "stats": {
       "type": "object",

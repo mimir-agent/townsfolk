@@ -18,7 +18,7 @@
 
 import { mkdir, readFile, rename, rm, writeFile } from "node:fs/promises";
 import { join } from "node:path";
-import type { DayEndRequest, DayEvent, DayRef, Season } from "./protocol.ts";
+import type { DayEndRequest, DayEvent, DayRef, Season, VanillaReason } from "./protocol.ts";
 import { SEASONS } from "./protocol.ts";
 import { seededRng, seedFrom } from "./rng.ts";
 import { emptyPlans, recordNight, type Night, type PlanState } from "./plan.ts";
@@ -76,6 +76,13 @@ export function clock(time: number): string {
   return `${h12}:${String(m).padStart(2, "0")}${h % 24 < 12 ? "am" : "pm"}`;
 }
 
+const CHAT_LINES: Record<VanillaReason, string> = {
+  "first-meeting": "met for the first time",
+  quest: "talked about an errand",
+  birthday: "talked on my birthday",
+  story: "talked",
+};
+
 // One line per event, from this NPC's point of view. A witness sees that a talk happened but
 // did not hear it, and sees a gift handed over but not how the receiver felt about it.
 // The key collapses repeats: a witness saw one conversation, not one per turn.
@@ -93,6 +100,11 @@ function describe(e: DayEvent, role: Role, player: string): { key: string; line:
   if (e.type === "gift") {
     const taste = e.taste ? ` (${e.taste})` : "";
     const line = `${player} gave me ${e.item}${taste} at ${e.location}, ${clock(e.time)}.`;
+    return { key: line, line };
+  }
+  // The game's own lines were shown and are not sent, so memory keeps only that they talked.
+  if (e.type === "chat") {
+    const line = `${player} and I ${CHAT_LINES[e.reason]} at ${e.location}, ${clock(e.time)}.`;
     return { key: line, line };
   }
   const reply = e.playerChoice ? ` ${player} answered: "${e.playerChoice}".` : "";
@@ -186,7 +198,7 @@ export function applyDay(mem: NpcMemory, day: DayRef, share: Witnessed[], player
   let next: NpcMemory = {
     ...mem,
     firstMet: mem.firstMet ?? (own.length > 0 ? dateLabel(day) : null),
-    talks: mem.talks + own.filter((e) => e.type === "talk").length,
+    talks: mem.talks + own.filter((e) => e.type === "talk" || e.type === "chat").length,
     gifts: mem.gifts + own.filter((e) => e.type === "gift").length,
     entries: [...mem.entries, { day: { season: day.season, day: day.day, year: day.year }, text: cap(lines.join(" "), MAX_ENTRY_TEXT) }],
   };

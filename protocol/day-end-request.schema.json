@@ -37,7 +37,7 @@
       "type": "object",
       "required": ["type", "npc", "location", "time", "witnesses"],
       "properties": {
-        "type": { "enum": ["talk", "gift", "join"] },
+        "type": { "enum": ["talk", "gift", "join", "chat"] },
         "npc": { "$ref": "common.schema.json#/$defs/name", "description": "The NPC who took part." },
         "location": { "type": "string", "minLength": 1, "maxLength": 80 },
         "time": { "type": "integer", "minimum": 600, "maximum": 2600 },
@@ -60,6 +60,14 @@
             "topic": { "type": "string", "minLength": 1, "maxLength": 120 }
           },
           "required": ["topic"]
+        },
+        {
+          "description": "The game's own dialogue answered the click instead of the brain: first meeting, an active quest for this NPC, their birthday, or story dialogue. The game's words are not sent; memory records only that they talked.",
+          "properties": {
+            "type": { "const": "chat" },
+            "reason": { "enum": ["first-meeting", "quest", "birthday", "story"] }
+          },
+          "required": ["reason"]
         },
         {
           "properties": {

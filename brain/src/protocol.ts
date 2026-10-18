@@ -43,6 +43,9 @@ export type TalkRequest = {
   joined?: boolean;
   transcript: TranscriptLine[];
   stats: GameStats;
+  // Ids of the game's scripted events the player has seen. story.ts keeps only the ones this
+  // NPC was in. Empty when the bridge sends none.
+  eventsSeen: string[];
 };
 
 // Something the NPC remembers from a picked reply (a promise, a confession). shareable false
@@ -71,7 +74,13 @@ type EventBase = { npc: string; location: string; time: number; witnesses: strin
 export type DayEvent =
   | (EventBase & { type: "talk"; npcLine: string; playerChoice?: string; fact?: TalkFact })
   | (EventBase & { type: "gift"; item: string; taste?: string })
-  | (EventBase & { type: "join"; topic: string });
+  | (EventBase & { type: "join"; topic: string })
+  // The game's own dialogue answered this click, not ours (first meeting, a quest, a birthday,
+  // story dialogue). Recorded so memory knows they talked; the game's words are not sent.
+  | (EventBase & { type: "chat"; reason: VanillaReason });
+
+export const VANILLA_REASONS = ["first-meeting", "quest", "birthday", "story"] as const;
+export type VanillaReason = (typeof VANILLA_REASONS)[number];
 
 // NPCs the bridge saw on the same map at the same time during the day, whether or not the
 // player was there. Gossip passes between them overnight.
@@ -101,7 +110,8 @@ export type WorldResponse = { v: 1; ok: true };
 // day is the date being planned (tomorrow, seen from the night before).
 // hearts: the farmer's friendship hearts with each NPC, so the planner picks each card's heart
 // tier. An NPC left out (or a bridge that sends no map yet) is planned at 0 hearts, the guarded tier.
-export type PlanRequest = { v: 1; saveId: string; playerName: string; day: DayRef; stats: GameStats; hearts: Record<string, number> };
+// eventsSeen: as in TalkRequest; the planner gives each NPC only its own scenes.
+export type PlanRequest = { v: 1; saveId: string; playerName: string; day: DayRef; stats: GameStats; hearts: Record<string, number>; eventsSeen: string[] };
 
 export type ScheduleStop = { time: number; location: string; x: number; y: number; facing: number };
 export type PlannedSchedule = { npc: string; stops: ScheduleStop[] };
@@ -144,6 +154,9 @@ const MAX_LOCATIONS = 200;
 // The bridge sends the items the planner may use in quests, not every item in the game.
 const MAX_ITEMS = 300;
 const MAX_FESTIVALS = 40;
+// A long save has seen a few hundred events at most; the cap only bounds the body.
+const MAX_EVENTS_SEEN = 2000;
+const EVENT_ID = /^[A-Za-z0-9_.-]{1,60}$/;
 // Location names end up in game schedule strings, which split on spaces and slashes.
 export const LOCATION_NAME = /^[A-Za-z0-9_.-]{1,80}$/;
 
@@ -227,6 +240,7 @@ export function parseTalk(v: unknown): TalkRequest {
     ...(b.joined === true ? { joined: true } : {}),
     transcript,
     stats: parseStats(b.stats),
+    eventsSeen: parseEventsSeen(b.eventsSeen),
   };
 }
 
@@ -305,7 +319,11 @@ export function parseDayEnd(v: unknown): DayEndRequest {
     if (o.type === "join") {
       return { type: "join", ...base, topic: str(o.topic, `events[${i}].topic`, 120) };
     }
-    throw new BadRequest(`events[${i}].type must be talk, gift or join`);
+    if (o.type === "chat") {
+      if (!VANILLA_REASONS.includes(o.reason as VanillaReason)) throw new BadRequest(`events[${i}].reason must be one of ${VANILLA_REASONS.join(", ")}`);
+      return { type: "chat", ...base, reason: o.reason as VanillaReason };
+    }
+    throw new BadRequest(`events[${i}].type must be talk, gift, join or chat`);
   });
   const together = parseTogether(b.together);
   return { v: 1, saveId: name(b.saveId, "saveId"), playerName: str(b.playerName, "playerName", 40), day: parseDay(b.day), events, ...(together ? { together } : {}) };
@@ -345,7 +363,18 @@ export function parseWorld(v: unknown): WorldRequest {
 
 export function parsePlan(v: unknown): PlanRequest {
   const b = body(v);
-  return { v: 1, saveId: name(b.saveId, "saveId"), playerName: str(b.playerName, "playerName", 40), day: parseDayRef(b.day, "day"), stats: parseStats(b.stats), hearts: parseHearts(b.hearts) };
+  return { v: 1, saveId: name(b.saveId, "saveId"), playerName: str(b.playerName, "playerName", 40), day: parseDayRef(b.day, "day"), stats: parseStats(b.stats), hearts: parseHearts(b.hearts), eventsSeen: parseEventsSeen(b.eventsSeen) };
+}
+
+// Event ids the player has seen. Duplicates are dropped; order does not matter.
+function parseEventsSeen(v: unknown): string[] {
+  if (v === undefined || v === null) return [];
+  const ids = list(v, "eventsSeen", MAX_EVENTS_SEEN).map((id, i) => {
+    const s = str(id, `eventsSeen[${i}]`, 60);
+    if (!EVENT_ID.test(s)) throw new BadRequest(`eventsSeen[${i}] has characters outside A-Z a-z 0-9 _ . -`);
+    return s;
+  });
+  return [...new Set(ids)];
 }
 
 // 0 to 14: 10 is the cap for a friend, 14 for a spouse.

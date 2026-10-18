@@ -48,7 +48,7 @@ const ROUTES: Record<string, [string | null, string]> = {
 export const day: GameDay = { season: "spring", day: 5, year: 1, time: 1130, weather: "sunny", location: "Town" };
 
 export function talkReq(over: Partial<TalkRequest> = {}): TalkRequest {
-  return { v: 1, saveId: "Farm_123", npc: "Abigail", playerName: "Tae", day, friendship: { hearts: 2, points: 500 }, transcript: [], stats: {}, ...over };
+  return { v: 1, saveId: "Farm_123", npc: "Abigail", playerName: "Tae", day, friendship: { hearts: 2, points: 500 }, transcript: [], stats: {}, eventsSeen: [], ...over };
 }
 
 export async function tempStore(): Promise<MemoryStore> {
