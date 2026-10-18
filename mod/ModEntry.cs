@@ -374,12 +374,23 @@ public sealed class ModEntry : Mod
     {
         this.convo = null;
         GameDay today = Today();
-        var req = new DayEndRequest(Constants.SaveFolderName ?? "unknown", Game1.player.Name, today, new List<DayEvent>(this.todaysEvents), this.todaysTogether.Values.ToList());
+        var events = new List<DayEvent>(this.todaysEvents);
+        List<Together> together = this.todaysTogether.Values.ToList();
         this.todaysEvents.Clear();
         this.todaysTogether.Clear();
         this.talkDeltaToday.Clear();
         this.joinedToday = false;
         this.chatsToday.Clear();
+        // A brand-new game ends its creation day before its save folder exists. SMAPI then names
+        // a folder with no farm name yet ("_451964697"), which is not the id the save will have
+        // and which the brain refuses. Nothing was played, so there is no day to send or plan.
+        if (Constants.CurrentSavePath is null)
+        {
+            this.Monitor.Log("No save folder yet (new game); skipped day-end and plan for tonight.", LogLevel.Debug);
+            return;
+        }
+        string saveId = Constants.SaveFolderName!;
+        var req = new DayEndRequest(saveId, Game1.player.Name, today, events, together);
         int count = req.Events.Count;
         this.endedDay = new DayRef(today.Season, today.Day, today.Year);
         // Fire and forget: never block the save on the brain. A failure is logged inside BrainClient.
@@ -390,7 +401,7 @@ public sealed class ModEntry : Mod
                 this.Monitor.Log($"Sent {count} events to the brain; they are kept once the game saves.", LogLevel.Debug);
         });
         // Tomorrow's plan is asked for once day-end lands; the planner reads it in the morning.
-        this.planner?.OnDayEnding(this.endedDayPost, new PlanRequest(Constants.SaveFolderName ?? "unknown", Game1.player.Name, Planner.Tomorrow(), ReadStats(), EventsSeen()));
+        this.planner?.OnDayEnding(this.endedDayPost, new PlanRequest(saveId, Game1.player.Name, Planner.Tomorrow(), ReadStats(), EventsSeen()));
     }
 
     // The save finished, so the day the brain is holding is now real: tell it to commit.
