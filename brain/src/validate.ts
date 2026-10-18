@@ -8,6 +8,7 @@
 // then the happening against the schedules that survived, then quest, friendship, relationships.
 
 import { isCast, pairKey } from "./cast.ts";
+import { isRoster } from "./graph.ts";
 import type {
   CalendarDay,
   DayRef,
@@ -246,7 +247,8 @@ export function checkRelationships(raw: unknown[]): { kept: RelationshipShift[];
     const part = r === null ? `relationship #${i + 1}` : `relationship ${a}-${b}`;
     const reason = text(r?.reason, MAX_REASON);
     if (r === null) dropped.push({ part, reason: "not an object" });
-    else if (!isCast(a) || !isCast(b) || a === b) dropped.push({ part, reason: "needs two different cast members" });
+    else if (!isRoster(a) || !isRoster(b) || a === b) dropped.push({ part, reason: "needs two different roster villagers" });
+    else if (!isCast(a) && !isCast(b)) dropped.push({ part, reason: "needs at least one planning cast member" });
     else if (kept.some((k) => pairKey(k.a, k.b) === pairKey(a, b))) dropped.push({ part, reason: "a second shift for the same pair on one day" });
     else if (!isInt(r.delta) || r.delta === 0) dropped.push({ part, reason: `delta ${JSON.stringify(r.delta)} is not a non-zero whole number` });
     else if (Math.abs(r.delta) > MAX_RELATIONSHIP) dropped.push({ part, reason: `delta ${r.delta} is over the +-${MAX_RELATIONSHIP} daily cap` });
