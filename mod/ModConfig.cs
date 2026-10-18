@@ -14,6 +14,12 @@ public sealed class ModConfig
     /// <summary>NPCs whose conversations go through the brain. Everyone else stays vanilla.</summary>
     public List<string> EnabledNpcs { get; set; } = new() { "Abigail", "Pierre", "Lewis", "Emily", "Shane" };
 
+    /// <summary>
+    /// Who goes through the brain: "roster" (the 26 villagers in Voiced.cs) or "list" (EnabledNpcs).
+    /// A config.json without this key gets "roster". The deny lists in Voiced.cs win either way.
+    /// </summary>
+    public string Voiced { get; set; } = global::Townsfolk.Voiced.RosterMode;
+
     /// <summary>When true, every villager who can socialize goes through the brain.</summary>
     public bool AllNpcs { get; set; } = false;
 

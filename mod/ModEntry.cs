@@ -3,6 +3,7 @@ using System.Collections.Generic;
 using System.Globalization;
 using System.Linq;
 using System.Text.RegularExpressions;
+using System.Threading;
 using System.Threading.Tasks;
 using Microsoft.Xna.Framework;
 using StardewModdingAPI;
@@ -37,8 +38,10 @@ public sealed class ModEntry : Mod
     // Conversations can be restarted all day, so talk-driven friendship per NPC per day is capped
     // too. Same number as the planner's daily friendship cap.
     private const int MaxTalkDeltaPerDay = 40;
-    // protocol: playerName is 1..40 chars; farmerName follows it.
+    // protocol: playerName is 1..40 chars; farmerName follows it. farmers[] holds at most 8
+    // (brain/src/protocol.ts MAX_FARMERS, the game's own limit).
     private const int MaxFarmerName = 40;
+    private const int MaxFarmers = 8;
 
     private ModConfig config = new();
     private BrainClient brain = null!;
@@ -104,7 +107,7 @@ public sealed class ModEntry : Mod
     }
 
     private bool IsEnabled(NPC npc) =>
-        npc.IsVillager && npc.CanSocialize && (this.config.AllNpcs || this.config.EnabledNpcs.Contains(npc.Name));
+        npc.IsVillager && npc.CanSocialize && Voiced.Allows(npc.Name, this.config.Voiced, this.config.AllNpcs, this.config.EnabledNpcs);
 
     /// <summary>farmerId on the wire: Farmer.UniqueMultiplayerID in decimal.</summary>
     internal static string FarmerId(Farmer f) => f.UniqueMultiplayerID.ToString(CultureInfo.InvariantCulture);
@@ -122,7 +125,7 @@ public sealed class ModEntry : Mod
             return;
 
         NPC? npc = FindNpcNear(e.Cursor.GrabTile);
-        if (npc is null || !this.IsEnabled(npc))
+        if (npc is null || !this.IsEnabled(npc) || CounterGuard.IsCounterClick(Game1.currentLocation, e.Cursor.GrabTile))
             return;
 
         ScreenState s = this.Screen;
@@ -157,7 +160,7 @@ public sealed class ModEntry : Mod
         npc.faceTowardFarmerForPeriod(6000, 4, false, Game1.player);
         npc.doEmote(Character.pauseEmote);
         s.Convo = new Conversation(npc);
-        s.Convo.Pending = this.AskTalk(this.BuildTalk(npc, s.Convo, null));
+        s.Convo.Ask(this.AskTalk(this.BuildTalk(npc, s.Convo, null)));
     }
 
     // The host computer asks its own brain. A farmhand asks the host; that Task completes with
@@ -257,10 +260,16 @@ public sealed class ModEntry : Mod
         this.planner?.OnUpdateTicked();
 
         ScreenState s = this.Screen;
-        if (s.Convo?.Pending is not { IsCompleted: true } done)
+        if (s.Convo?.Pending is not { } done)
             return;
 
         Conversation c = s.Convo;
+        // A reply that has not come within the talk timeout is given up on here, on the game
+        // thread, whatever state the request is in. Its late answer, if any, is never shown.
+        // This is also the farmhand's relay wait: no talk.resp in time means vanilla below.
+        bool overdue = !done.IsCompleted && TalkWait.Overdue(c.AskedAtMs, Environment.TickCount64, this.config.TimeoutSeconds);
+        if (!done.IsCompleted && !overdue)
+            return;
 
         // The player left the map or a cutscene started while we waited: drop the reply quietly.
         if (!Context.IsWorldReady || Game1.eventUp || Game1.currentLocation != c.Location)
@@ -275,6 +284,13 @@ public sealed class ModEntry : Mod
 
         c.Pending = null;
         TalkResponse? reply = done.Status == TaskStatus.RanToCompletion ? done.Result : null;
+        // The request state and thread pool numbers are here to find why the first talk after
+        // a load hung in the 436a094 smoke test; HttpClient's own timeout never fired then.
+        if (overdue)
+            this.Monitor.Log(
+                $"No reply from the brain for {c.Npc.Name} in {this.config.TimeoutSeconds}s (request {done.Status}, " +
+                $"thread pool {ThreadPool.ThreadCount} threads, {ThreadPool.PendingWorkItemCount} queued).",
+                LogLevel.Warn);
 
         // Brain down, slow, or out of good answers on the opening turn: the NPC says their normal line.
         if (c.Turns == 0 && (reply is null || reply.Source == "fallback"))
@@ -328,7 +344,7 @@ public sealed class ModEntry : Mod
         TalkRequest req = this.BuildTalk(c.Npc, c, said);
         c.Transcript.Add(new TranscriptLine("player", picked.Text));
         c.Npc.doEmote(Character.pauseEmote);
-        c.Pending = this.AskTalk(req);
+        c.Ask(this.AskTalk(req));
     }
 
     // The game applies the gift a tick or so after the click; watch for up to one second.
@@ -423,10 +439,21 @@ public sealed class ModEntry : Mod
         if (!Context.IsMainPlayer)
             return;
         GameDay today = Today(Game1.player);
-        var req = new DayEndRequest(Constants.SaveFolderName ?? "unknown", Game1.player.Name, today, new List<DayEvent>(this.todaysEvents), this.todaysTogether.Values.ToList());
+        var events = new List<DayEvent>(this.todaysEvents);
+        List<Together> together = this.todaysTogether.Values.ToList();
         this.todaysEvents.Clear();
         this.todaysTogether.Clear();
         this.relay.OnDayEnding();
+        // A brand-new game ends its creation day before its save folder exists. SMAPI then names
+        // a folder with no farm name yet ("_451964697"), which is not the id the save will have
+        // and which the brain refuses. Nothing was played, so there is no day to send or plan.
+        if (Constants.CurrentSavePath is null)
+        {
+            this.Monitor.Log("No save folder yet (new game); skipped day-end and plan for tonight.", LogLevel.Debug);
+            return;
+        }
+        string saveId = Constants.SaveFolderName!;
+        var req = new DayEndRequest(saveId, Game1.player.Name, today, events, together);
         int count = req.Events.Count;
         this.endedDay = new DayRef(today.Season, today.Day, today.Year);
         // Fire and forget: never block the save on the brain. A failure is logged inside BrainClient.
@@ -437,7 +464,7 @@ public sealed class ModEntry : Mod
                 this.Monitor.Log($"Sent {count} events to the brain; they are kept once the game saves.", LogLevel.Debug);
         });
         // Tomorrow's plan is asked for once day-end lands; the planner reads it in the morning.
-        this.planner?.OnDayEnding(this.endedDayPost, new PlanRequest(Constants.SaveFolderName ?? "unknown", Game1.player.Name, Planner.Tomorrow(), ReadStats(Game1.player), EventsSeen(Game1.player), this.PlannedFarmers()));
+        this.planner?.OnDayEnding(this.endedDayPost, new PlanRequest(saveId, Game1.player.Name, Planner.Tomorrow(), ReadStats(Game1.player), EventsSeen(Game1.player), this.PlannedFarmers()));
     }
 
     // The save finished, so the day the brain is holding is now real: tell it to commit.
@@ -463,6 +490,7 @@ public sealed class ModEntry : Mod
         Game1.getOnlineFarmers()
             .Where(f => f.IsMainPlayer || this.IsSplitScreen(f.UniqueMultiplayerID) || this.relay.IsGreeted(f.UniqueMultiplayerID))
             .Select(f => new PlanFarmer(FarmerId(f), FarmerName(f), Hearts(f)))
+            .Take(MaxFarmers)
             .ToList();
 
     private bool IsSplitScreen(long farmerId) => this.Helper.Multiplayer.GetConnectedPlayer(farmerId)?.IsSplitScreen == true;
@@ -590,6 +618,14 @@ public sealed class ModEntry : Mod
         public int Turns { get; set; }
         public List<TranscriptLine> Transcript { get; } = new();
         public Task<TalkResponse?>? Pending { get; set; }
+        // When Pending was asked for, from Environment.TickCount64.
+        public long AskedAtMs { get; private set; }
+
+        public void Ask(Task<TalkResponse?> reply)
+        {
+            this.Pending = reply;
+            this.AskedAtMs = Environment.TickCount64;
+        }
     }
 
     private sealed record PendingGift(NPC Npc, Item Item, int GiftsBefore)

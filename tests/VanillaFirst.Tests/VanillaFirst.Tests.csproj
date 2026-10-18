@@ -11,6 +11,7 @@
 
   <ItemGroup>
     <Compile Include="../../mod/VanillaFirst.cs" Link="VanillaFirst.cs" />
+    <Compile Include="../../mod/TalkWait.cs" Link="TalkWait.cs" />
   </ItemGroup>
 
   <ItemGroup>

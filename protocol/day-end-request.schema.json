@@ -36,8 +36,11 @@
     "event": {
       "type": "object",
       "required": ["type", "npc", "location", "time", "witnesses"],
+      "dependentRequired": { "farmerId": ["farmerName"], "farmerName": ["farmerId"] },
       "properties": {
         "type": { "enum": ["talk", "gift", "join", "chat"] },
+        "farmerId": { "$ref": "common.schema.json#/$defs/farmerId", "description": "The farmer it happened with. The event lands only in that farmer's section of each NPC's memory. Optional: absent means the single-player main farmer, named by the day's playerName." },
+        "farmerName": { "$ref": "common.schema.json#/$defs/farmerName" },
         "npc": { "$ref": "common.schema.json#/$defs/name", "description": "The NPC who took part." },
         "location": { "type": "string", "minLength": 1, "maxLength": 80 },
         "time": { "type": "integer", "minimum": 600, "maximum": 2600 },

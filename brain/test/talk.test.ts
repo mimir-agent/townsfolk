@@ -9,7 +9,7 @@ import { CAST } from "../src/cast.ts";
 import { dayKey, shareByNpc } from "../src/memory.ts";
 import { fakeAdapter } from "../src/model.ts";
 import { memoriesTonight } from "../src/plan.ts";
-import type { DayEvent, GameDay } from "../src/protocol.ts";
+import { MAIN_FARMER, type DayEvent, type GameDay } from "../src/protocol.ts";
 import { CHOICE_DELTA_MAX, JOIN_GAIN, JOIN_TEXT, LINE_MAX, NO_CONTEXT, fitLine, talk, validateReply } from "../src/talk.ts";
 import { emptyTown } from "../src/town.ts";
 import { emptyMemory } from "../src/memory.ts";
@@ -77,7 +77,7 @@ test("done-when 1: a talk with Emily during the happening offers a join choice; 
     const tonight = memoriesTonight(stored, pending, spring(7));
     const share = shareByNpc(pending.events);
     for (const npc of CAST) {
-      const text = tonight.get(npc)!.entries.map((e) => e.text).join(" ");
+      const text = (tonight.get(npc)!.farmers[MAIN_FARMER]?.entries ?? []).map((e) => e.text).join(" ");
       const hasJoin = (share.get(npc) ?? []).some((w) => w.event.type === "join");
       if (HAPPENING.participants.includes(npc)) {
         assert.ok(hasJoin, `${npc} has the join in its share`);
@@ -88,7 +88,7 @@ test("done-when 1: a talk with Emily during the happening offers a join choice; 
       }
     }
     // Haley saw Emily talking with the player, but not the join.
-    assert.match(tonight.get("Haley")!.entries[0]!.text, /I saw Tae talking with Emily/);
+    assert.match(tonight.get("Haley")!.farmers[MAIN_FARMER]!.entries[0]!.text, /I saw Tae talking with Emily/);
 
     // After the save the join is a town fact every participant saw, and only they know.
     await c.post("/v1/saved", { v: 1, saveId: SAVE, day: spring(6) });
@@ -176,7 +176,7 @@ test("done-when 2: a promise picked in talk is in Robin's memory after /v1/saved
     assert.equal((await c.post("/v1/saved", { v: 1, saveId: SAVE, day: spring(5) })).json.outcome, "committed");
 
     const robin = await c.store.load(SAVE, "Robin");
-    assert.match(robin.entries.at(-1)!.text, /I will remember: The farmer promised to bring me 20 hardwood by Friday\./);
+    assert.match(robin.farmers[MAIN_FARMER]!.entries.at(-1)!.text, /I will remember: The farmer promised to bring me 20 hardwood by Friday\./);
     // Abigail saw the talk but did not hear the promise.
     const abigail = await c.store.load(SAVE, "Abigail");
     assert.doesNotMatch(JSON.stringify(abigail), /hardwood/);
@@ -214,7 +214,7 @@ test("a fact told in confidence is remembered but never gossiped", async () => {
     const fact = (await c.store.loadTown(SAVE)).facts.find((f) => f.knowers.Abigail?.text === secret)!;
     assert.equal(fact.shareable, false);
     assert.deepEqual(Object.keys(fact.knowers), ["Abigail"]);
-    assert.match((await c.store.load(SAVE, "Abigail")).entries[0]!.text, /\(told in confidence\)/);
+    assert.match((await c.store.load(SAVE, "Abigail")).farmers[MAIN_FARMER]!.entries[0]!.text, /\(told in confidence\)/);
   });
 });
 

@@ -4,11 +4,14 @@
   "title": "POST /v1/talk request",
   "type": "object",
   "required": ["v", "saveId", "npc", "playerName", "day", "friendship"],
+  "dependentRequired": { "farmerId": ["farmerName"], "farmerName": ["farmerId"] },
   "properties": {
     "v": { "$ref": "common.schema.json#/$defs/v" },
     "saveId": { "$ref": "common.schema.json#/$defs/name" },
     "npc": { "$ref": "common.schema.json#/$defs/name" },
     "playerName": { "type": "string", "minLength": 1, "maxLength": 40 },
+    "farmerId": { "$ref": "common.schema.json#/$defs/farmerId", "description": "The farmer talking. The prompt carries this farmer's memory section in full and one short line for each other farmer the NPC knows. friendship is this farmer's. Optional: absent means the single-player main farmer." },
+    "farmerName": { "$ref": "common.schema.json#/$defs/farmerName" },
     "day": { "$ref": "common.schema.json#/$defs/gameDay" },
     "friendship": {
       "type": "object",

@@ -287,7 +287,7 @@ test("planner prompt: each NPC's block holds only its own memory and facts, plus
       assert.match(blocks[npc]!, /Feelings toward the others/);
       assert.match(blocks[npc]!, /Goal: /);
     }
-    assert.match(blocks.Haley!, /Shane -5/);
+    assert.match(blocks.Haley!, /Shane 0\./);
     assert.doesNotMatch(first, /CANARY-123[\s\S]*CANARY-123/, "the canary appears once, in Emily's block");
     assert.match(first, /Festivals in the next two weeks: spring 13, year 1: Egg Festival/);
     assert.match(first, /No earlier plans\./);
