@@ -4,6 +4,27 @@ Working title. A Stardew Valley (SMAPI) mod where Claude runs the town: conversa
 
 Work in progress (weekend hackathon).
 
+## Playing
+
+Townsfolk runs a host-only brain with farmhand-only SMAPI + mod: only the computer that hosts the game runs the brain and talks to Claude. Single player is the host case. The full player steps ship in the release zip as `README.txt` (source: [`release/README.txt`](release/README.txt)).
+
+Not run on Windows yet. The Windows steps here and in `release/README.txt` (`start-brain.cmd`, finding `claude.cmd` or `claude.exe` on PATH, the Mac-built mod DLL under Windows SMAPI) have not been tried on a Windows PC.
+
+### Host (or playing alone)
+
+On the host only:
+
+1. Install SMAPI.
+2. Install the mod: unzip `townsfolk-vX.Y.Z.zip` into the game's `Mods` folder, giving `Mods/Townsfolk`.
+3. Install Node.js 24 or newer. The brain ships inside the zip (`Mods/Townsfolk/brain`) with nothing more to install.
+4. Let the brain reach Claude: log in to the Claude Code CLI once (`claude`), or set `TOWNSFOLK_MODEL=anthropic` and `ANTHROPIC_API_KEY` (the API key path is untested so far).
+5. Start the brain (`start-brain.cmd` on Windows, `sh start-brain.sh` on Mac or Linux) and leave it running. The brain must be running before the host loads the save.
+6. Start the game through SMAPI and load the farm.
+
+### Joining player
+
+Install SMAPI and the mod (unzip into `Mods`) only, nothing else: no Node.js, no brain, no Claude login, no API key. The host's brain does that work.
+
 ## Layout
 
 - `brain/`: the town brain, TypeScript on Node 24+ with no build step. A localhost HTTP server that writes each conversation turn and keeps per-NPC memory on disk.

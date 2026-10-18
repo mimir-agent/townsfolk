@@ -38,6 +38,7 @@ HOST (or playing alone)
       Nothing else to set: this is what the brain uses by default.
 
    b) Your own Anthropic API key (pay per use, from https://console.anthropic.com).
+      UNTESTED SO FAR: nobody has played with this option yet. Option a) is the tried one.
       Open Command Prompt and type these two lines, with your key in place of YOUR-KEY:
         setx TOWNSFOLK_MODEL anthropic
         setx ANTHROPIC_API_KEY YOUR-KEY
@@ -50,8 +51,9 @@ HOST (or playing alone)
    Leave it open while you play. Close it when you are done.
    (Mac or Linux: run   sh start-brain.sh   in a terminal from that folder.)
 
-6. Start Stardew Valley through SMAPI and load your farm. Talk to Abigail, Pierre, Lewis, Emily
-   or Shane. They pause for a moment while the brain writes, then you pick a reply.
+6. Start the brain before you load your farm. Then start Stardew Valley through SMAPI and load
+   your farm. Talk to Abigail, Pierre, Lewis, Emily or Shane. They pause for a moment while the
+   brain writes, then you pick a reply.
 
 
 JOINING PLAYER (you join someone else's game)
