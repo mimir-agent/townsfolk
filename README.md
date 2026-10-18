@@ -65,6 +65,8 @@ On the Mac mini. You need two things running: the brain in a terminal, and the g
 
 4. In game, talk to Abigail, Pierre, Lewis, Emily or Shane. They show a thinking bubble while the brain writes, then a line with 3 or 4 replies to pick from. A conversation runs up to 3 replies. Talk, give a gift, sleep, and talk to the same person the next day: they remember.
 
+The game's own dialogue still answers when it matters, so the mod never holds back the story or a quest. That is the first meeting with someone (so the Introductions quest counts them), anyone an active quest sends you to, a villager's birthday, and any line tied to an event, relationship or town milestone, or one that gives an item or asks a question. Those talks are remembered too ("we met for the first time"), without the game's words. Each villager also knows the heart events you saw with them, and the ones they were in for someone else's, so Shane can bring up the day at the cliffs. Nobody else knows that scene unless they were in it.
+
 What to expect when something is off:
 
 - Brain not running or slower than 8 seconds: the NPC says their normal game line. Nothing crashes.
@@ -134,4 +136,5 @@ With `--adapter claude-cli` the player's picks are still seeded, but the model's
 ```sh
 cd brain && npm test && npm run typecheck   # no network, no model: tests use a fake adapter
 cd mod && ~/.dotnet/dotnet build -p:EnableModDeploy=false   # branch builds never touch the game's Mods folder
+~/.dotnet/dotnet test tests/VanillaFirst.Tests   # who answers a click; no game needed
 ```

@@ -80,7 +80,7 @@ export function newFact(id: string, created: DayRef, text: string, shareable: bo
 //   join  the player joined a happening: every participant saw it, and may pass it on
 //   talk  only when the picked reply carried a fact (a promise): the NPC spoken to was told it;
 //         witnesses saw a conversation but did not hear it. In confidence means not shareable.
-// Other talk makes no fact; what was said already lives in that NPC's memory.
+// Other talk, and a vanilla chat, makes no fact; what was said lives in that NPC's memory.
 export function factsFromDay(day: PendingDay): Fact[] {
   const facts: Fact[] = [];
   const add = (text: string, shareable: boolean, knowers: Record<string, FactSource>) => {
@@ -91,7 +91,7 @@ export function factsFromDay(day: PendingDay): Fact[] {
   for (const e of day.events) {
     if (e.type === "gift") add(`${day.playerName} gave ${e.npc} ${e.item} at ${e.location}.`, true, sawIt(e.npc, e.witnesses));
     else if (e.type === "join") add(`${day.playerName} joined in at ${e.location}: ${e.topic}.`, true, sawIt(e.npc, e.witnesses));
-    else if (e.fact !== undefined) add(e.fact.text, e.fact.shareable, { [e.npc]: { kind: "told" } });
+    else if (e.type === "talk" && e.fact !== undefined) add(e.fact.text, e.fact.shareable, { [e.npc]: { kind: "told" } });
   }
   return facts;
 }

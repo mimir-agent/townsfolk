@@ -195,3 +195,31 @@ test("a v1 memory file from the tonight slice is read and kept", async () => {
   assert.equal(after.talks, 3);
   assert.deepEqual((await readdir(join(store.dir, SAVE))).sort(), ["Abigail.json", "Emily.json", "Pierre.json", "_town.json"]);
 });
+
+test("a vanilla chat (the game's own dialogue) is remembered as a meeting, counts as a talk, and leaves no game words", async () => {
+  await withServer(fakeAdapter([DEFAULT_FAKE_REPLY]), async (c) => {
+    const met: DayEvent = { type: "chat", npc: "Shane", location: "AnimalShop", time: 900, witnesses: ["Marnie"], reason: "first-meeting" };
+    assert.equal((await c.post("/v1/day-end", dayEnd(spring5, [met]))).status, 200);
+    assert.equal((await c.post("/v1/saved", { v: 1, saveId: SAVE, day: ref(spring5) })).json.outcome, "committed");
+    const shane = await c.store.load(SAVE, "Shane");
+    assert.equal(shane.firstMet, "spring 5, year 1");
+    assert.equal(shane.talks, 1);
+    assert.match(shane.entries[0]!.text, /Tae and I met for the first time at AnimalShop, 9:00am/);
+    const marnie = await c.store.load(SAVE, "Marnie");
+    assert.match(marnie.entries[0]!.text, /I saw Tae talking with Shane at AnimalShop/);
+    assert.equal(marnie.firstMet, null);
+    // The next talk prompt no longer treats the farmer as a stranger.
+    const model = fakeAdapter([DEFAULT_FAKE_REPLY]);
+    await talk(talkReq({ npc: "Shane" }), shane, emptyTown(), NO_CONTEXT, model, { deadlineMs: 5000, log: () => {} });
+    assert.match(model.calls[0]!.user, /First met Tae: spring 5, year 1/);
+  });
+});
+
+test("a chat with an unknown reason is refused", async () => {
+  await withServer(fakeAdapter([DEFAULT_FAKE_REPLY]), async (c) => {
+    const bad = { type: "chat", npc: "Shane", location: "Town", time: 900, witnesses: [], reason: "small-talk" };
+    const res = await c.postRaw("/v1/day-end", dayEnd(spring5, [bad as unknown as DayEvent]));
+    assert.equal(res.status, 400);
+    assert.match(res.json.error, /reason must be one of first-meeting, quest, birthday, story/);
+  });
+});

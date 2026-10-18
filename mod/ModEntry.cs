@@ -42,6 +42,8 @@ public sealed class ModEntry : Mod
     private readonly Dictionary<string, int> talkDeltaToday = new();
     // The player joined a happening today; the brain offers no second join.
     private bool joinedToday;
+    // "npc|reason" for each vanilla chat recorded today.
+    private readonly HashSet<string> chatsToday = new();
 
     // The day handed to the brain at DayEnding, and that request's Task. Saved fires after the
     // date has already moved on, so it reports this remembered date, and it is sent only once the
@@ -79,6 +81,7 @@ public sealed class ModEntry : Mod
         this.todaysTogether.Clear();
         this.talkDeltaToday.Clear();
         this.joinedToday = false;
+        this.chatsToday.Clear();
         this.convo = null;
         this.pendingGift = null;
         this.endedDay = null;
@@ -105,6 +108,18 @@ public sealed class ModEntry : Mod
             return;
         }
 
+        // The game's own dialogue answers when it can move the game forward or carries the story.
+        // Not suppressed, so vanilla runs this click exactly as it would without the mod.
+        if (this.convo?.Pending is null)
+        {
+            VanillaReason why = VanillaFirst.Decide(this.ReadGate(npc));
+            if (why != VanillaReason.None)
+            {
+                this.RecordChat(npc, why);
+                return;
+            }
+        }
+
         this.Helper.Input.Suppress(e.Button);
 
         // A reply is on its way: swallow the extra click so vanilla dialogue does not race it.
@@ -118,6 +133,56 @@ public sealed class ModEntry : Mod
         this.convo = new Conversation(npc);
         this.convo.Pending = this.brain.Talk(this.BuildTalk(npc, this.convo, null));
     }
+
+    // What VanillaFirst needs, read from the game. Reading CurrentDialogue loads today's
+    // dialogue stack if it is not loaded yet, which is what vanilla's own click does first; the
+    // top line is only peeked, never taken. If the reflected fields ever disappear (a game
+    // update), this throws before Suppress, so SMAPI logs it and vanilla handles the click.
+    private TalkGate ReadGate(NPC npc)
+    {
+        Farmer p = Game1.player;
+        PendingDialogue? pending = null;
+        if (npc.CurrentDialogue.TryPeek(out Dialogue? d))
+        {
+            bool question = this.Helper.Reflection.GetField<bool>(d, "isLastDialogueInteractive").GetValue()
+                || this.Helper.Reflection.GetField<bool>(d, "quickResponse").GetValue();
+            bool commands = question || d.isItemGrabDialogue() || d.dialogues.Any(line => line.SideEffects is not null);
+            pending = new PendingDialogue(d.TranslationKey, commands);
+        }
+        return new TalkGate(npc.Name, p.friendshipData.ContainsKey(npc.Name), HasQuestFor(p, npc.Name), npc.isBirthday(), pending);
+    }
+
+    // An unfinished quest that completes, or reports back, by talking to this NPC. Item delivery
+    // also completes by handing the item over, which the gift path already leaves to vanilla.
+    private static bool HasQuestFor(Farmer p, string npc) =>
+        p.questLog.Any(q => !q.completed.Value && q switch
+        {
+            StardewValley.Quests.SocializeQuest s => s.whoToGreet.Contains(npc),
+            StardewValley.Quests.ItemDeliveryQuest i => i.target.Value == npc,
+            StardewValley.Quests.LostItemQuest l => l.npcName.Value == npc,
+            StardewValley.Quests.SecretLostItemQuest l => l.npcName.Value == npc,
+            StardewValley.Quests.FishingQuest f => f.target.Value == npc,
+            StardewValley.Quests.ResourceCollectionQuest r => r.target.Value == npc,
+            StardewValley.Quests.SlayMonsterQuest m => m.target.Value == npc,
+            _ => false,
+        });
+
+    // One chat per NPC per reason per day: a birthday NPC clicked five times is one memory.
+    private void RecordChat(NPC npc, VanillaReason why)
+    {
+        if (!this.chatsToday.Add($"{npc.Name}|{why}"))
+            return;
+        this.todaysEvents.Add(new DayEvent("chat", npc.Name, Game1.currentLocation.Name, Game1.timeOfDay, Witnesses(npc), Reason: VanillaFirst.WireName(why)));
+        this.Monitor.Log($"Vanilla dialogue for {npc.Name} ({VanillaFirst.WireName(why)}).", LogLevel.Debug);
+    }
+
+    // Event ids the player has seen, for the brain to pick each NPC's own (brain/src/story.ts).
+    // Same id rule and cap as protocol/common.schema.json; an id outside it (another mod's) is left out.
+    private static readonly Regex EventId = new(@"^[A-Za-z0-9_.-]{1,60}$", RegexOptions.CultureInvariant);
+    private const int MaxEventsSeen = 2000;
+
+    internal static List<string> EventsSeen() =>
+        Game1.player.eventsSeen.Where(id => EventId.IsMatch(id)).Take(MaxEventsSeen).ToList();
 
     private static NPC? FindNpcNear(Vector2 grabTile)
     {
@@ -301,6 +366,7 @@ public sealed class ModEntry : Mod
         this.todaysTogether.Clear();
         this.talkDeltaToday.Clear();
         this.joinedToday = false;
+        this.chatsToday.Clear();
         int count = req.Events.Count;
         this.endedDay = new DayRef(today.Season, today.Day, today.Year);
         // Fire and forget: never block the save on the brain. A failure is logged inside BrainClient.
@@ -311,7 +377,7 @@ public sealed class ModEntry : Mod
                 this.Monitor.Log($"Sent {count} events to the brain; they are kept once the game saves.", LogLevel.Debug);
         });
         // Tomorrow's plan is asked for once day-end lands; the planner reads it in the morning.
-        this.planner?.OnDayEnding(this.endedDayPost, new PlanRequest(Constants.SaveFolderName ?? "unknown", Game1.player.Name, Planner.Tomorrow(), ReadStats()));
+        this.planner?.OnDayEnding(this.endedDayPost, new PlanRequest(Constants.SaveFolderName ?? "unknown", Game1.player.Name, Planner.Tomorrow(), ReadStats(), EventsSeen()));
     }
 
     // The save finished, so the day the brain is holding is now real: tell it to commit.
@@ -340,7 +406,8 @@ public sealed class ModEntry : Mod
         recent,
         new List<TranscriptLine>(c.Transcript),
         ReadStats(),
-        this.joinedToday ? true : null);
+        this.joinedToday ? true : null,
+        EventsSeen());
 
     // Every ten game minutes: which villagers share a map right now, wherever the player is.
     private void SampleTogether()

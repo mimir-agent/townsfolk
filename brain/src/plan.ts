@@ -201,7 +201,7 @@ export function buildPlanPrompt(req: PlanRequest, ctx: PlanContext, cast: readon
       goalLine(npc, goal, need, avoid, req.day),
       `Feelings toward the others (-100 to 100): ${others}.`,
       `Memory (only what ${npc} took part in or saw):\n${memoryLines(ctx.memories.get(npc) ?? emptyMemory(npc))}`,
-      knowledgeBlock(npc, req.stats, ctx.town),
+      knowledgeBlock(npc, req.stats, ctx.town, req.eventsSeen),
     ]
       .filter(Boolean)
       .join("\n");

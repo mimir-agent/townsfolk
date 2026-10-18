@@ -41,6 +41,12 @@
         "shareable": { "type": "boolean" }
       }
     },
+    "eventsSeen": {
+      "type": "array",
+      "maxItems": 2000,
+      "items": { "type": "string", "pattern": "^[A-Za-z0-9_.-]{1,60}$" },
+      "description": "Ids of the game's scripted events the player has seen (Game1.player.eventsSeen), sent unfiltered. The brain keeps, per NPC, only the cast heart events that NPC took part in or was present for (brain/src/story.ts). Optional, default empty."
+    },
     "choice": {
       "type": "object",
       "required": ["id", "text"],
