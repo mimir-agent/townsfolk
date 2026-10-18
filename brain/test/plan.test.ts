@@ -210,6 +210,11 @@ test("validator: times, GOTO, married NPCs, tiles, happening presence, caps, que
   assert.ok(s(GOOD_SCHEDULES.Gus).ok);
   assert.match((s([{ time: 900, location: "Town", x: 1, y: 1, facing: 2 }, { time: 900, location: "Saloon", x: 1, y: 1, facing: 2 }]) as { reason: string }).reason, /not after 900/);
   assert.match((s([{ time: 2610, location: "Town", x: 1, y: 1, facing: 2 }]) as { reason: string }).reason, /not a game time/);
+  // A first stop at 600, the start of the day, runs at 610, the first time the game runs a stop.
+  // 600 later in a schedule, and anything earlier, are still dropped.
+  assert.deepEqual(s([{ time: 600, location: "Town", x: 1, y: 1, facing: 2 }]), { ok: true, value: [{ time: 610, location: "Town", x: 1, y: 1, facing: 2 }] });
+  assert.match((s([{ time: 610, location: "Town", x: 1, y: 1, facing: 2 }, { time: 600, location: "Town", x: 1, y: 1, facing: 2 }]) as { reason: string }).reason, /stop 2 time 600 is not a game time/);
+  assert.match((s([{ time: 550, location: "Town", x: 1, y: 1, facing: 2 }]) as { reason: string }).reason, /not a game time/);
   assert.match((s([{ time: 905, location: "Town", x: 1, y: 1, facing: 2 }]) as { reason: string }).reason, /not a game time/);
   assert.match((s([{ time: 900, location: "Town", x: 120, y: 1, facing: 2 }]) as { reason: string }).reason, /outside Town \(120x110\)/);
   assert.match((s("900 Town 1 1 2/GOTO spring") as { reason: string }).reason, /must be a list/);
