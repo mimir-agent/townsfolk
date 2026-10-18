@@ -128,6 +128,26 @@ function clean(s: string): string {
 
 export class InvalidReply extends Error {}
 
+// A sentence ends at . ! or ? (then any closing quote) before a space or the end, unless the
+// word is a title like "Mr.", which the town uses ("Mr. Qi").
+const SENTENCE_END = /(?<!\b(?:Mr|Mrs|Ms|Dr|St))[.!?]+["')]*(?=\s|$)/g;
+
+// A line over LINE_MAX keeps its whole sentences up to the cap, so a reply a few characters
+// long still reaches the player instead of failing the turn. A line with no sentence end
+// inside the cap cannot be cut cleanly and is refused, so the reply is retried.
+export function fitLine(line: string): string {
+  if (line.length === 0) throw new InvalidReply(`line length 0 outside 1..${LINE_MAX}`);
+  if (line.length <= LINE_MAX) return line;
+  let cut = 0;
+  for (const m of line.matchAll(SENTENCE_END)) {
+    const end = m.index + m[0].length;
+    if (end > LINE_MAX) break;
+    cut = end;
+  }
+  if (cut === 0) throw new InvalidReply(`line length ${line.length} over ${LINE_MAX} with no sentence end inside it`);
+  return line.slice(0, cut);
+}
+
 // A whole number of friendship points, clamped into the per-choice cap. A choice without a
 // delta moves nothing (0). Any other non-number is refused, so the reply is retried.
 function choiceDelta(v: unknown, i: number): number {
@@ -175,8 +195,7 @@ export function validateReply(raw: string, mustEnd: boolean, offer: HappeningVie
   if (typeof parsed !== "object" || parsed === null) throw new InvalidReply("reply is not an object");
   const p = parsed as Record<string, unknown>;
   if (typeof p.line !== "string") throw new InvalidReply("line missing");
-  const line = clean(p.line);
-  if (line.length === 0 || line.length > LINE_MAX) throw new InvalidReply(`line length ${line.length} outside 1..${LINE_MAX}`);
+  const line = fitLine(clean(p.line));
   const ending = mustEnd || p.end === true;
   if (ending) return { line, choices: [], end: true };
   if (!Array.isArray(p.choices) || p.choices.length < 3 || p.choices.length > 4) throw new InvalidReply("need 3 or 4 choices");
