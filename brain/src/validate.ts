@@ -1,7 +1,8 @@
 // The plan validator. Authoritative: every part of a model-written plan is checked here against
 // the world snapshot the bridge sent at save load (POST /v1/world), and anything that fails is
 // dropped on its own with a reason. One bad part never costs the rest of the plan.
-// The bridge later re-checks only what needs the live game (is the tile passable).
+// The bridge later re-checks only what needs the live game (the walking route, and the tile,
+// which it moves to the nearest one an NPC can stand on).
 //
 // Pure functions, no I/O. plan.ts decides the order: schedules first (with the repeat regen),
 // then the happening against the schedules that survived, then quest, friendship, relationships.
@@ -20,6 +21,7 @@ import type {
   WorldRequest,
 } from "./protocol.ts";
 
+export const DAY_START = 600;
 export const FIRST_TIME = 610;
 export const LAST_TIME = 2600;
 export const MAX_STOPS = 12;
@@ -126,16 +128,19 @@ export function checkSchedule(npc: string, stops: unknown, world: World): Check<
   for (const [i, raw] of stops.entries()) {
     const s = rec(raw);
     if (s === null) return fail(`stop ${i + 1} is not an object`);
-    if (!isInt(s.time) || !isClock(s.time)) return fail(`stop ${i + 1} time ${JSON.stringify(s.time)} is not a game time in ${FIRST_TIME}..${LAST_TIME}`);
+    // The day starts at 600 and the model often writes that for "first thing"; the first stop
+    // the game runs is 610.
+    const time = i === 0 && s.time === DAY_START ? FIRST_TIME : s.time;
+    if (!isInt(time) || !isClock(time)) return fail(`stop ${i + 1} time ${JSON.stringify(time)} is not a game time in ${FIRST_TIME}..${LAST_TIME}`);
     const prev = out.at(-1);
-    if (prev !== undefined && s.time <= prev.time) return fail(`stop ${i + 1} time ${s.time} is not after ${prev.time}`);
+    if (prev !== undefined && time <= prev.time) return fail(`stop ${i + 1} time ${time} is not after ${prev.time}`);
     const loc = world.locations.find((l) => l.name === s.location);
     if (loc === undefined) return fail(`stop ${i + 1} location ${JSON.stringify(s.location)} is not in the world`);
     if (!isInt(s.x) || !isInt(s.y) || s.x < 0 || s.y < 0 || s.x >= loc.width || s.y >= loc.height) {
       return fail(`stop ${i + 1} tile ${JSON.stringify(s.x)},${JSON.stringify(s.y)} is outside ${loc.name} (${loc.width}x${loc.height})`);
     }
     if (!isInt(s.facing) || s.facing < 0 || s.facing > 3) return fail(`stop ${i + 1} facing must be 0..3`);
-    out.push({ time: s.time, location: loc.name, x: s.x, y: s.y, facing: s.facing });
+    out.push({ time, location: loc.name, x: s.x, y: s.y, facing: s.facing });
   }
   return { ok: true, value: out };
 }

@@ -48,6 +48,9 @@ public sealed class Planner
     private readonly IModHelper helper;
     private readonly IMonitor monitor;
     private readonly BrainClient brain;
+    // PathFindController.isPositionImpassableForNPCSchedule(location, x, y, npc): the per-step
+    // test of the pathfinder that walks villagers along their schedules.
+    private readonly IReflectedMethod impassableForSchedule;
 
     // The plan request in flight and the day it is for. Set at DayEnding, cleared once applied or dropped.
     private Task<PlanResponse?>? planPost;
@@ -66,6 +69,8 @@ public sealed class Planner
         this.helper = helper;
         this.monitor = monitor;
         this.brain = brain;
+        // Protected in the game, so read through SMAPI. Throws at load if a game update renames it.
+        this.impassableForSchedule = helper.Reflection.GetMethod(typeof(PathFindController), "isPositionImpassableForNPCSchedule");
         helper.Events.Content.AssetRequested += this.OnAssetRequested;
         helper.Events.GameLoop.DayStarted += this.OnDayStarted;
     }
@@ -167,7 +172,8 @@ public sealed class Planner
     }
 
     // The brain's validator is authoritative. The bridge re-checks only what needs the live game:
-    // the NPC is here, each stop's location exists, and each stop's tile is on the map and passable.
+    // the NPC is here, each stop's location exists and is reachable from home, and each stop's tile
+    // is on the map. A tile the NPC cannot stand on moves to the nearest one it can (TileSnap).
     // One failing stop drops that NPC's whole schedule, so they keep their vanilla day.
     private int ApplySchedules(List<PlannedSchedule> planned)
     {
@@ -186,12 +192,22 @@ public sealed class Planner
                 this.monitor.Log($"Dropped {s.Npc}'s schedule: married NPCs keep their own.", LogLevel.Debug);
                 continue;
             }
-            if (s.Stops.Select(st => StopProblem(npc, st)).FirstOrDefault(p => p is not null) is { } problem)
+            var stops = new List<PlanStop>();
+            string? problem = null;
+            foreach (PlanStop st in s.Stops)
+            {
+                if (this.ResolveStop(npc, st, out problem) is not { } placed)
+                    break;
+                if (placed.X != st.X || placed.Y != st.Y)
+                    this.monitor.Log($"Moved {s.Npc}'s {st.Time} stop in {st.Location} from {st.X},{st.Y} to {placed.X},{placed.Y}, the nearest tile to stand on.", LogLevel.Debug);
+                stops.Add(placed);
+            }
+            if (problem is not null)
             {
                 this.monitor.Log($"Dropped {s.Npc}'s schedule: {problem}.", LogLevel.Debug);
                 continue;
             }
-            string script = string.Join("/", s.Stops.Select(st => $"{st.Time} {st.Location} {st.X} {st.Y} {st.Facing}"));
+            string script = string.Join("/", stops.Select(st => $"{st.Time} {st.Location} {st.X} {st.Y} {st.Facing}"));
             next[s.Npc] = (key, script);
         }
 
@@ -203,23 +219,43 @@ public sealed class Planner
         return next.Count;
     }
 
-    private static string? StopProblem(NPC npc, PlanStop stop)
+    // The stop as it will be served: its tile moved to the nearest one the NPC can stand on
+    // (TileSnap.Radius). Null, with the reason, when the stop cannot be served at all.
+    private PlanStop? ResolveStop(NPC npc, PlanStop stop, out string? problem)
     {
+        problem = null;
         if (!LocationName.IsMatch(stop.Location))
-            return $"location name {stop.Location} is not allowed";
-        GameLocation? location = Game1.getLocationFromName(stop.Location);
-        if (location is null)
-            return $"no location {stop.Location}";
-        var tile = new Vector2(stop.X, stop.Y);
-        if (!location.isTileOnMap(tile))
-            return $"{stop.X},{stop.Y} is off the {stop.Location} map";
-        if (!location.isTilePassable(tile))
-            return $"{stop.X},{stop.Y} in {stop.Location} is not passable";
+            problem = $"location name {stop.Location} is not allowed";
+        else if (Game1.getLocationFromName(stop.Location) is not { } location)
+            problem = $"no location {stop.Location}";
+        else if (!location.isTileOnMap(new Vector2(stop.X, stop.Y)))
+            problem = $"{stop.X},{stop.Y} is off the {stop.Location} map";
         // The game walks villagers between maps along its warp routes. With no route it logs an
         // error and the NPC stands still, so a stop the NPC cannot walk to from home is dropped.
-        if (npc.DefaultMap != stop.Location && WarpPathfindingCache.GetLocationRoute(npc.DefaultMap, stop.Location, npc.Gender) is null)
-            return $"no walking route from {npc.DefaultMap} to {stop.Location}";
+        else if (npc.DefaultMap != stop.Location && WarpPathfindingCache.GetLocationRoute(npc.DefaultMap, stop.Location, npc.Gender) is null)
+            problem = $"no walking route from {npc.DefaultMap} to {stop.Location}";
+        else if (TileSnap.Nearest(stop.X, stop.Y, (x, y) => this.Standable(location, x, y, npc)) is not { } tile)
+            problem = $"no tile to stand on within {TileSnap.Radius} of {stop.X},{stop.Y} in {stop.Location}";
+        else
+            return stop with { X = tile.X, Y = tile.Y };
         return null;
+    }
+
+    // Things that block a tile for good. Farmers and characters move, so they do not count; a
+    // passable thing (grass, flooring, a rug) does not block either.
+    private const CollisionMask Fixtures =
+        CollisionMask.Buildings | CollisionMask.Flooring | CollisionMask.Furniture | CollisionMask.Objects | CollisionMask.TerrainFeatures | CollisionMask.LocationSpecific;
+
+    // A tile an NPC can walk onto and stand on: the test the game's schedule pathfinder applies
+    // to every step, plus the tile's own collision, no water, and nothing fixed standing there.
+    private bool Standable(GameLocation location, int x, int y, NPC npc)
+    {
+        var tile = new Vector2(x, y);
+        return location.isTileOnMap(tile)
+            && location.isTilePassable(tile)
+            && !this.impassableForSchedule.Invoke<bool>(location, x, y, npc)
+            && !location.isWaterTile(x, y)
+            && !location.IsTileOccupiedBy(tile, Fixtures, ignorePassables: Fixtures);
     }
 
     // One mailed item-delivery quest. Only new townsfolk_ ids are ever added to Data/Quests and

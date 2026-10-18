@@ -10,7 +10,7 @@ import { dayKey, shareByNpc } from "../src/memory.ts";
 import { fakeAdapter } from "../src/model.ts";
 import { memoriesTonight } from "../src/plan.ts";
 import type { DayEvent, GameDay } from "../src/protocol.ts";
-import { CHOICE_DELTA_MAX, JOIN_GAIN, JOIN_TEXT, NO_CONTEXT, talk, validateReply } from "../src/talk.ts";
+import { CHOICE_DELTA_MAX, JOIN_GAIN, JOIN_TEXT, LINE_MAX, NO_CONTEXT, fitLine, talk, validateReply } from "../src/talk.ts";
 import { emptyTown } from "../src/town.ts";
 import { emptyMemory } from "../src/memory.ts";
 import { talkReq, withServer, type Client } from "./helpers.ts";
@@ -244,6 +244,31 @@ test("done-when 3: 2 choices, then 5 choices: one retry, then the canned fallbac
   assert.equal(r.end, true);
   assert.deepEqual(r.choices, []);
   assert.equal(logs.filter((l) => /need 3 or 4 choices/.test(l)).length, 2);
+});
+
+test("a line a few characters over the cap is cut at its last sentence end inside the cap, not failed", async () => {
+  // Over the cap by a few characters, as in the smoke test: the last sentence crosses the cap.
+  const keep = "Oh, it's you! I was just thinking about you, honestly. Mr. Qi came by the salon earlier and asked the strangest questions about the old mines, and I had no idea what he meant.";
+  const over = `${keep} You should come by the Saloon tonight for a drink?`;
+  assert.ok(keep.length <= LINE_MAX && over.length > LINE_MAX, `${keep.length} / ${over.length}`);
+  assert.equal(fitLine(over), keep);
+  // "Mr." is not a sentence end.
+  assert.equal(fitLine(`${"a".repeat(205)}. Ask Mr. Qi about it.`), `${"a".repeat(205)}.`);
+  // A closing quote stays with its sentence.
+  assert.equal(fitLine(`She said "go home!" ${"b".repeat(215)}`), 'She said "go home!"');
+  // Within the cap nothing changes; with no sentence end inside the cap the line still fails.
+  assert.equal(fitLine("Hi."), "Hi.");
+  assert.equal(fitLine("x".repeat(LINE_MAX)), "x".repeat(LINE_MAX));
+  assert.throws(() => fitLine("y".repeat(LINE_MAX + 5)), /no sentence end/);
+  assert.throws(() => fitLine(""), /outside 1\.\./);
+
+  const model = fakeAdapter([talkReply(PLAIN, over)]);
+  const r = await talk(talkReq(), emptyMemory("Abigail"), emptyTown(), NO_CONTEXT, model, quiet);
+  assert.equal(model.calls.length, 1, "no retry");
+  assert.equal(r.source, "model");
+  assert.equal(r.end, false);
+  assert.equal(r.line, keep);
+  assert.equal(r.choices.length, 3);
 });
 
 test("the NPC's own active goal reaches its talk prompt, and no one else's", async () => {

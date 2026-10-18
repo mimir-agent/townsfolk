@@ -99,7 +99,7 @@ Only the host runs the brain. Joining players install SMAPI and the mod only. On
 
 In game (`mod/Planner.cs`): at save load the mod sends the world (locations with sizes, quest-worthy items, festival days, married NPCs). When the day ends it asks for tomorrow's plan without waiting. About a second after the next morning starts, if the plan is in, the mod applies it:
 
-- Schedules: each planned NPC gets a schedule for today's date through `Characters/schedules/<Name>`. The mod first re-checks every stop against the live game (the location exists, the tile is on the map and passable, there is a walking route from the NPC's home); one failing stop keeps that NPC on their vanilla day. A vanilla schedule already written for this exact date wins.
+- Schedules: each planned NPC gets a schedule for today's date through `Characters/schedules/<Name>`. The mod first re-checks every stop against the live game: the location exists, the tile is on the map, and there is a walking route from the NPC's home. A stop on a tile an NPC cannot stand on moves to the nearest tile they can, within 4 tiles; with none in reach the stop fails. One failing stop keeps that NPC on their vanilla day. A vanilla schedule already written for this exact date wins.
 - Quest: one item-delivery quest with a `townsfolk_` id, added to `Data/Quests` and `Data/mail` and sent as a letter that adds the quest when read. Only from someone the player has met. The mod keeps the quests it has sent in `Mods/Townsfolk/data/<save folder>.json` so they still exist after a restart. Vanilla quest and mail entries are never edited.
 - Friendship: each shift is added toward the player, for NPCs the player has already met.
 
