@@ -231,15 +231,24 @@ public sealed class ModEntry : Mod
     // single player time stands still as it does in vanilla dialogue.
     private void AskAndWait(Conversation c, TalkRequest req)
     {
-        c.Ask(this.AskTalk(req));
+        this.Ask(c, req);
         this.ShowWaiting(c);
+    }
+
+    // One talk turn. On the host computer the brain streams the NPC's line before the choices,
+    // and the waiting box shows it at once; the whole reply that follows is what is used. A
+    // farmhand's relayed talk is not streamed (the relay carries whole replies only).
+    private void Ask(Conversation c, TalkRequest req)
+    {
+        int turn = c.NextTurn();
+        c.Ask(Context.IsOnHostComputer ? this.brain.Talk(req, line => c.SetEarlyLine(turn, line)) : this.relay.Talk(req));
     }
 
     private void ShowWaiting(Conversation c)
     {
         if (Game1.activeClickableMenu is null)
         {
-            c.Box = new WaitingBox(c.Npc);
+            c.Box = new WaitingBox(c.Npc, () => c.EarlyLine);
             Game1.activeClickableMenu = c.Box;
         }
     }
@@ -259,11 +268,6 @@ public sealed class ModEntry : Mod
             s.Abandoned[c.Npc.Name] = new List<TranscriptLine>(c.Transcript);
         s.Convo = null;
     }
-
-    // The host computer asks its own brain. A farmhand asks the host; that Task completes with
-    // null after TimeoutSeconds, and the opening turn then falls back to vanilla checkAction.
-    private Task<TalkResponse?> AskTalk(TalkRequest req) =>
-        Context.IsOnHostComputer ? this.brain.Talk(req) : this.relay.Talk(req);
 
     // What VanillaFirst needs, read from the game. Reading CurrentDialogue loads today's
     // dialogue stack if it is not loaded yet, which is what vanilla's own click does first; the
@@ -473,7 +477,7 @@ public sealed class ModEntry : Mod
         TalkRequest req = this.BuildTalk(c.Npc, c, said);
         c.Transcript.Add(new TranscriptLine("player", picked.Text));
         // The question box is still closing; the tick opens the waiting box as soon as it has.
-        c.Ask(this.AskTalk(req));
+        this.Ask(c, req);
         c.Box = null;
     }
 
@@ -799,6 +803,26 @@ public sealed class ModEntry : Mod
         {
             this.Pending = reply;
             this.AskedAtMs = Environment.TickCount64;
+        }
+
+        // The streamed line of the turn being waited on, set from the thread pool. A turn number
+        // keeps a late line from an earlier turn out of a later turn's box.
+        private int turn;
+        private string? earlyLine;
+
+        public string? EarlyLine => Volatile.Read(ref this.earlyLine);
+
+        /// <summary>Starts a new turn: no line yet. Returns its number for SetEarlyLine.</summary>
+        public int NextTurn()
+        {
+            Volatile.Write(ref this.earlyLine, null);
+            return Interlocked.Increment(ref this.turn);
+        }
+
+        public void SetEarlyLine(int forTurn, string line)
+        {
+            if (Volatile.Read(ref this.turn) == forTurn)
+                Volatile.Write(ref this.earlyLine, line);
         }
     }
 

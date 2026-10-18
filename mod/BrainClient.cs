@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using System.IO;
 using System.Linq;
 using System.Net.Http;
 using System.Text;
@@ -56,6 +57,9 @@ public sealed record TalkRequest(
 {
     public int V { get; init; } = BrainClient.ProtocolVersion;
 }
+
+/// <summary>The first line of a streamed talk: the NPC's line, before the choices (protocol/talk-partial.schema.json).</summary>
+public sealed record TalkPartial(int V, bool Partial, string Line);
 
 /// <summary>Reason: only on a fallback, why the brain had no usable reply. Logged, never shown as dialogue.</summary>
 public sealed record TalkResponse(int V, string Line, List<TalkChoice> Choices, bool End, string Source, HappeningView? Happening = null, string? Reason = null);
@@ -175,11 +179,16 @@ public sealed class BrainClient
         this.log = log;
     }
 
-    public async Task<TalkResponse?> Talk(TalkRequest req)
+    /// <summary>
+    /// Asks for one talk turn. With onLine, the brain is asked to stream (Accept NDJSON): onLine
+    /// runs on the thread pool with the NPC's line as soon as it is written, before the choices,
+    /// at most once. The returned reply is always the whole one, and its line is the one to keep.
+    /// </summary>
+    public async Task<TalkResponse?> Talk(TalkRequest req, Action<string>? onLine = null)
     {
         try
         {
-            string? body = await this.Post("v1/talk", req, this.http);
+            string? body = onLine is null ? await this.Post("v1/talk", req, this.http) : await this.PostStreamed("v1/talk", req, onLine);
             if (body is null)
                 return null;
             TalkResponse? res = JsonSerializer.Deserialize<TalkResponse>(body, Json);
@@ -277,6 +286,57 @@ public sealed class BrainClient
             return null;
         }
         return body;
+    }
+
+    public const string Ndjson = "application/x-ndjson";
+
+    // A streamed talk: the headers come back as soon as the brain has the line (or with the whole
+    // reply when there is none), then the body is read line by line as it arrives.
+    private async Task<string?> PostStreamed<T>(string path, T payload, Action<string> onLine)
+    {
+        using var content = new StringContent(JsonSerializer.Serialize(payload, Json), Encoding.UTF8, "application/json");
+        using var msg = new HttpRequestMessage(HttpMethod.Post, path) { Content = content };
+        msg.Headers.Accept.ParseAdd(Ndjson);
+        msg.Headers.Accept.ParseAdd("application/json");
+        using HttpResponseMessage res = await this.http.SendAsync(msg, HttpCompletionOption.ResponseHeadersRead);
+        if (!res.IsSuccessStatusCode)
+        {
+            string err = await res.Content.ReadAsStringAsync();
+            this.log($"brain {path} HTTP {(int)res.StatusCode}: {Truncate(err)}");
+            return null;
+        }
+        using var reader = new StreamReader(await res.Content.ReadAsStreamAsync(), Encoding.UTF8);
+        return await ReadTalkStream(reader, onLine);
+    }
+
+    /// <summary>
+    /// Reads a talk body, streamed or not, and returns the whole reply's JSON. A streamed body is
+    /// at most one partial line ({"v":1,"partial":true,"line":...}), passed to onLine, then the
+    /// reply. A plain JSON body is the reply itself. Null when the body ends with no reply.
+    /// </summary>
+    public static async Task<string?> ReadTalkStream(TextReader reader, Action<string> onLine)
+    {
+        string? last = null;
+        bool partialSeen = false;
+        while (await reader.ReadLineAsync() is { } line)
+        {
+            if (string.IsNullOrWhiteSpace(line))
+                continue;
+            TalkPartial? p = null;
+            if (!partialSeen && line.Contains("\"partial\""))
+            {
+                try { p = JsonSerializer.Deserialize<TalkPartial>(line, Json); }
+                catch (JsonException) { p = null; }
+            }
+            if (p is { V: ProtocolVersion, Partial: true } && !string.IsNullOrWhiteSpace(p.Line))
+            {
+                partialSeen = true;
+                onLine(p.Line);
+                continue;
+            }
+            last = last is null ? line : last + "\n" + line;
+        }
+        return last;
     }
 
     private static string Truncate(string s) => s.Length <= 300 ? s : s[..300];
