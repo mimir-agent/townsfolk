@@ -14,6 +14,7 @@ import { mkdir, writeFile } from "node:fs/promises";
 import { dirname, resolve } from "node:path";
 import { parseArgs } from "node:util";
 import { claudeCliAdapter } from "../src/model.ts";
+import { isFile, resolveCommand } from "../src/platform.ts";
 import { fakeTownAdapter } from "./fake-town.ts";
 import { runSim } from "./run.ts";
 
@@ -48,7 +49,7 @@ const started = Date.now();
 const result = await runSim({
   days,
   seed,
-  model: real ? () => claudeCliAdapter({ bin: env.TOWNSFOLK_CLAUDE_BIN ?? "claude", model: env.TOWNSFOLK_CLAUDE_MODEL ?? "haiku" }) : fakeTownAdapter,
+  model: real ? () => claudeCliAdapter({ command: resolveCommand(env.TOWNSFOLK_CLAUDE_BIN ?? "claude", process.platform, env, isFile), model: env.TOWNSFOLK_CLAUDE_MODEL ?? "haiku" }) : fakeTownAdapter,
   // The bridge's deadlines for a real model; the fake answers at once.
   talkDeadlineMs: real ? 30_000 : 5_000,
   planDeadlineMs: real ? 240_000 : 5_000,

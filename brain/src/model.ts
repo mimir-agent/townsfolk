@@ -1,6 +1,10 @@
 // Model adapters. Each returns the raw text the model produced; talk.ts parses and validates it.
 
 import { spawn } from "node:child_process";
+import { mkdtemp, rm, writeFile } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { type Command, spawnPlan } from "./platform.ts";
 
 export type ModelAdapter = {
   name: string;
@@ -12,46 +16,61 @@ export const TALK_MAX_TOKENS = 600;
 
 // Spawns the official Claude Code CLI. It uses its own login; this code never sees a token.
 // No tools, no settings, no session files: one prompt in, one JSON envelope out.
-export function claudeCliAdapter(opts: { bin: string; model: string }): ModelAdapter {
+// The system prompt goes through a temp file, not an argument: on Windows claude.cmd runs
+// through cmd.exe, which cannot carry line breaks or quotes and caps a line at 8191 characters.
+export function claudeCliAdapter(opts: { command: Command; model: string }): ModelAdapter {
   return {
     name: "claude-cli",
-    complete(system, user, signal) {
-      return new Promise((resolve, reject) => {
-        const child = spawn(
-          opts.bin,
-          [
-            "-p",
-            "--output-format", "json",
-            "--model", opts.model,
-            "--tools", "",
-            "--no-session-persistence",
-            "--setting-sources", "",
-            "--system-prompt", system,
-          ],
-          { stdio: ["pipe", "pipe", "pipe"], signal },
-        );
-        let out = "";
-        let err = "";
-        child.stdout.setEncoding("utf8").on("data", (d: string) => (out += d));
-        child.stderr.setEncoding("utf8").on("data", (d: string) => (err += d));
-        child.on("error", reject);
-        child.on("close", (code) => {
-          if (code !== 0) return reject(new Error(`claude exited ${code}: ${err.slice(0, 300)}`));
-          let envelope: { is_error?: boolean; result?: unknown };
-          try {
-            envelope = JSON.parse(out) as typeof envelope;
-          } catch {
-            return reject(new Error(`claude printed non-JSON: ${out.slice(0, 200)}`));
-          }
-          if (envelope.is_error === true || typeof envelope.result !== "string") {
-            return reject(new Error(`claude returned an error envelope: ${out.slice(0, 300)}`));
-          }
-          resolve(envelope.result);
-        });
-        child.stdin.end(user);
-      });
+    async complete(system, user, signal) {
+      const dir = await mkdtemp(join(tmpdir(), "townsfolk-"));
+      const promptFile = join(dir, "system.txt");
+      try {
+        await writeFile(promptFile, system);
+        return await runClaude(opts, promptFile, user, signal);
+      } finally {
+        await rm(dir, { recursive: true, force: true });
+      }
     },
   };
+}
+
+function runClaude(opts: { command: Command; model: string }, promptFile: string, user: string, signal: AbortSignal): Promise<string> {
+  return new Promise((resolve, reject) => {
+    const plan = spawnPlan(opts.command, [
+      "-p",
+      "--output-format", "json",
+      "--model", opts.model,
+      "--tools", "",
+      "--no-session-persistence",
+      "--setting-sources", "",
+      "--system-prompt-file", promptFile,
+    ]);
+    const child = spawn(plan.file, plan.args, {
+      stdio: ["pipe", "pipe", "pipe"],
+      signal,
+      windowsVerbatimArguments: plan.windowsVerbatimArguments,
+      windowsHide: true,
+    });
+    let out = "";
+    let err = "";
+    child.stdout.setEncoding("utf8").on("data", (d: string) => (out += d));
+    child.stderr.setEncoding("utf8").on("data", (d: string) => (err += d));
+    child.on("error", reject);
+    child.on("close", (code) => {
+      if (code !== 0) return reject(new Error(`claude exited ${code}: ${err.slice(0, 300)}`));
+      let envelope: { is_error?: boolean; result?: unknown };
+      try {
+        envelope = JSON.parse(out) as typeof envelope;
+      } catch {
+        return reject(new Error(`claude printed non-JSON: ${out.slice(0, 200)}`));
+      }
+      if (envelope.is_error === true || typeof envelope.result !== "string") {
+        return reject(new Error(`claude returned an error envelope: ${out.slice(0, 300)}`));
+      }
+      resolve(envelope.result);
+    });
+    child.stdin.end(user);
+  });
 }
 
 // For players: their own key from ANTHROPIC_API_KEY. Not exercised in the tonight slice.
